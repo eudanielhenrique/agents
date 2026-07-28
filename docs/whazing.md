@@ -109,9 +109,10 @@ tenant:<tenantId>:whazing:<instanceId>:ticket:<ticketId>
 1. **Inbox resolution**: `WhazingInbox.findFirst({ where: { tenantId, instanceId, whazingQueueId: String(queueId) } })` → catch-all fallback (null queueId). No match → `"no-agent"`.
 2. **Thread key**: `resolveWhazingGraphThreadId` (contact-channel preferred).
 3. **loadAgentConfig**: called with `instanceId: BigInt(0)` and `conversationId: ticketId`. The Chatwoot conv query returns null (no such row); contact/inbox prompt vars are empty (known MVP limitation). TODO: add a `WhazingConversation` row for proper context when the spike confirms the data shape.
-4. **buildToolset**: Whazing-native tools injected via `buildWhazingNativeTools` (closure-bound to the `WhazingClient` and `ticketId`). The `ctx.client` cast (`as unknown as ChatwootClient`) is safe — `buildToolset` only uses it for slow-tool acks (sendMessage + toggleTyping, both in `InboxReplyClient`); `buildWhazingNativeTools` ignores its `ctx.client` argument.
-5. **Re-check before reply**: `client.getTicket(ticketId)` after the model answers. If `assignedUserId != null` or `status === "closed"`, the bot was taken over → `"taken-over"` (no post).
-6. **deliverReply**: shared with Chatwoot via `InboxReplyClient`; split delivery works normally.
+4. **Media ingestion**: after loading `loaded`, `resolveWhazingSttConfig` reads the agent's STT settings. If enabled and an audio attachment (`mediaType === "audio"|"voice"|"ptt"`) is present, `transcribeWhazingAudio` downloads the `mediaUrl` (SSRF-safe, no-auth) and calls the provider. `renderWhazingMessage(event, transcription)` shapes the final text for the LLM, producing audio markers on failure. The whole path is best-effort — a misconfig or download error falls back to the marker string, never strands the delivery.
+5. **buildToolset**: Whazing-native tools injected via `buildWhazingNativeTools` (closure-bound to the `WhazingClient` and `ticketId`). The `ctx.client` cast (`as unknown as ChatwootClient`) is safe — `buildToolset` only uses it for slow-tool acks (sendMessage + toggleTyping, both in `InboxReplyClient`); `buildWhazingNativeTools` ignores its `ctx.client` argument.
+6. **Re-check before reply**: `client.getTicket(ticketId)` after the model answers. If `assignedUserId != null` or `status === "closed"`, the bot was taken over → `"taken-over"` (no post).
+7. **deliverReply**: shared with Chatwoot via `InboxReplyClient`; split delivery works normally.
 
 ## Native tools (`src/modules/whazing/tools.ts`)
 
@@ -149,7 +150,7 @@ Chatwoot-specific tools (`set_custom_attribute`, `assign_label`, `kanban_*`, `se
 
 - `sendPrivateNote` and `sendAudioMessage` endpoints are tentative — verify against a live instance (issue #14).
 - `loadAgentConfig` with `instanceId: BigInt(0)` means contact/inbox prompt variables are empty. A dedicated `WhazingConversation` row would fix this.
-- Media ingestion (STT for voice notes, vision for images) is not yet wired (issue #9).
+- Media ingestion: STT for voice notes is wired (`renderWhazingMessage` + `transcribeWhazingAudio` in `src/modules/whazing/render.ts` + `media.ts`). Vision (image description) is not yet implemented.
 - A PROCESSING→PENDING reaper (stranded delivery recovery) is not yet implemented.
 - The debounce, STT, TTS, service-window, and channel-redirect subsystems are Chatwoot-only — they can be extended to Whazing in follow-up issues.
 - `set_voice_preference` is not available (would need a `Contact` row for the Whazing contact, which is not currently mirrored).

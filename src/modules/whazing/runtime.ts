@@ -19,6 +19,8 @@ import {
 import type { RunAgentTurnOutcome } from "@/graph/runtime";
 import { resolveWhazingGraphThreadId } from "./thread-keys";
 import { loadWhazingClient } from "./instance";
+import { resolveWhazingSttConfig, transcribeWhazingAudio } from "./media";
+import { renderWhazingMessage } from "./render";
 import { buildWhazingNativeTools } from "./tools";
 import type { NormalizedWhazingEvent } from "./types";
 
@@ -93,10 +95,6 @@ export async function runWhazingAgentTurn(
   );
   if (!loaded) return "no-agent";
 
-  // Build message text from the event.
-  const text = event.message?.body?.trim() ?? "";
-  if (!text) return "skipped";
-
   const flow: FlowContext = {
     tenantId,
     turnId: crypto.randomUUID(),
@@ -109,6 +107,38 @@ export async function runWhazingAgentTurn(
   };
 
   const client = await loadWhazingClient(tenantId, instanceId, base);
+
+  // Attempt STT for the first audio attachment (best-effort — never strands the delivery).
+  let transcription: string | null = null;
+  const sttCfg = await resolveWhazingSttConfig(tenantId, agentId, base);
+  if (sttCfg) {
+    const audioAtt = event.message?.attachments.find(
+      (a) =>
+        a.mediaUrl &&
+        (a.mediaType === "audio" ||
+          a.mediaType === "voice" ||
+          a.mediaType === "ptt"),
+    );
+    if (audioAtt?.mediaUrl) {
+      transcription = await transcribeWhazingAudio({
+        mediaUrl: audioAtt.mediaUrl,
+        cfg: sttCfg,
+        tenantId,
+        base,
+        flow,
+      }).catch((e) => {
+        logger.warn(
+          "whazing stt unexpected error (ticket=%s): %s",
+          String(ticketId),
+          e instanceof Error ? e.message : String(e),
+        );
+        return null;
+      });
+    }
+  }
+
+  const text = renderWhazingMessage(event, transcription);
+  if (!text) return "skipped";
 
   // buildToolset with Whazing-native tools. The ctx.client cast is safe: buildToolset
   // uses it only for slow-tool acks (sendMessage + toggleTyping — both in InboxReplyClient).

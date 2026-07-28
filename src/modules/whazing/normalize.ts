@@ -123,13 +123,13 @@ export function normalizeWhazingEvent(
 }
 
 // Returns true when the event is a new message from the customer that the bot should evaluate.
+// Accepts audio-only messages (body empty but attachments present) so voice notes reach the runtime.
 export function isNewIncomingMessage(event: NormalizedWhazingEvent): boolean {
-  return (
-    event.event === "message_received" &&
-    event.ticketId != null &&
-    event.message != null &&
-    !!(event.message.body?.trim())
-  );
+  if (event.event !== "message_received") return false;
+  if (event.ticketId == null) return false;
+  const msg = event.message;
+  if (!msg) return false;
+  return !!(msg.body?.trim()) || msg.attachments.length > 0;
 }
 
 // Returns true when the bot should handle this event (not skip it).

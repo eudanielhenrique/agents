@@ -233,6 +233,22 @@ describe("isNewIncomingMessage", () => {
     })!;
     expect(isNewIncomingMessage(ev)).toBe(false);
   });
+
+  test("returns true for audio-only message (no body, has attachment)", () => {
+    const ev = normalizeWhazingEvent({
+      event: "message_received",
+      ticketId: 1,
+      status: "pending",
+      message: {
+        fromMe: false,
+        body: null,
+        attachments: [
+          { mediaType: "audio", url: "https://cdn.whazing.com/audio.ogg" },
+        ],
+      },
+    })!;
+    expect(isNewIncomingMessage(ev)).toBe(true);
+  });
 });
 
 // ── shouldWhazingBotHandle ────────────────────────────────────────────────────
