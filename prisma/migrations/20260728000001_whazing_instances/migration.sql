@@ -92,16 +92,16 @@ ALTER TABLE "whazing_instances" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "whazing_instances" FORCE ROW LEVEL SECURITY;
 CREATE POLICY "tenant_isolation" ON "whazing_instances"
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::BIGINT
-      OR current_setting('app.is_super_admin', TRUE) = 'true');
+      OR current_setting('app.is_super_admin', TRUE) = 'on');
 
 ALTER TABLE "whazing_inboxes" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "whazing_inboxes" FORCE ROW LEVEL SECURITY;
 CREATE POLICY "tenant_isolation" ON "whazing_inboxes"
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::BIGINT
-      OR current_setting('app.is_super_admin', TRUE) = 'true');
+      OR current_setting('app.is_super_admin', TRUE) = 'on');
 
 ALTER TABLE "whazing_webhook_deliveries" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "whazing_webhook_deliveries" FORCE ROW LEVEL SECURITY;
 CREATE POLICY "tenant_isolation" ON "whazing_webhook_deliveries"
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::BIGINT
-      OR current_setting('app.is_super_admin', TRUE) = 'true');
+      OR current_setting('app.is_super_admin', TRUE) = 'on');
