@@ -145,6 +145,9 @@ model Tenant {
   mcpOAuthAccessTokens          McpOAuthAccessToken[]
   mcpOAuthRefreshTokens         McpOAuthRefreshToken[]
   mcpOAuthPendingAuthorizations McpOAuthPendingAuthorization[]
+  whazingInstances              WhazingInstance[]
+  whazingWebhookDeliveries      WhazingWebhookDelivery[]
+  whazingInboxes                WhazingInbox[]
 
   @@map("tenants")
 }
@@ -335,6 +338,85 @@ model ChatwootWebhookDelivery {
   @@map("chatwoot_webhook_deliveries")
 }
 
+// ──────────────────────────────────────────────────────── whazing ──
+
+// One Whazing ACCOUNT (API connection) per tenant. Equivalent to ChatwootInstance.
+// The API key is encrypted at rest (encryptJson base64 blob — String, never Json).
+// The webhook route token is stored only as its SHA-256 hash; plaintext is embedded
+// in the webhook URL and never persisted. null disconnectedAt = active.
+model WhazingInstance {
+  id                    BigInt    @id @default(autoincrement())
+  tenantId              BigInt    @map("tenant_id")
+  name                  String
+  baseUrl               String    @map("base_url")
+  apiKey                String    @map("api_key") // encryptJson blob — never Json, never logged
+  // SHA-256 of the opaque route token embedded in the webhook URL; plaintext never stored.
+  webhookRouteTokenHash String    @unique @map("webhook_route_token_hash")
+  // Soft-disconnect: null = active; non-null = disconnected (history preserved).
+  disconnectedAt        DateTime? @map("disconnected_at")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  tenant     Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  deliveries WhazingWebhookDelivery[]
+  inboxes    WhazingInbox[]
+
+  // One Whazing instance per (tenant, url): a shared server can back many tenants but the
+  // same account URL can't be registered twice within one tenant.
+  @@unique([tenantId, baseUrl])
+  @@index([tenantId])
+  @@map("whazing_instances")
+}
+
+// Idempotency ledger for the Whazing webhook receiver. No payload stored (PII precedent:
+// ChatwootWebhookDelivery). Keyed by (whazingInstanceId, deliveryId) — dedupes retries.
+model WhazingWebhookDelivery {
+  id                BigInt                @id @default(autoincrement())
+  tenantId          BigInt                @map("tenant_id")
+  whazingInstanceId BigInt                @map("whazing_instance_id")
+  // messageId from Whazing, or SHA-256 of body when absent.
+  deliveryId        String                @map("delivery_id")
+  event             String
+  status            InboundDeliveryStatus @default(PENDING)
+  attempts          Int                   @default(0)
+  receivedAt        DateTime              @default(now()) @map("received_at")
+  processedAt       DateTime?             @map("processed_at")
+
+  tenant   Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  instance WhazingInstance @relation(fields: [whazingInstanceId], references: [id], onDelete: Cascade)
+
+  @@unique([whazingInstanceId, deliveryId])
+  @@index([tenantId])
+  @@map("whazing_webhook_deliveries")
+}
+
+// Maps a Whazing queue/channel to a fazer.ai agent persona. Equivalent to Inbox but
+// Whazing-specific. null whazingQueueId = default/catch-all (no queue filter).
+// null agentId = unassigned.
+// NOTE: the @@unique allows multiple NULL whazingQueueId rows per (tenant, instance) in
+// Postgres (NULLs are distinct in unique indexes). Enforce the single-catch-all rule via
+// a partial unique index added by hand in the migration.
+model WhazingInbox {
+  id                BigInt   @id @default(autoincrement())
+  tenantId          BigInt   @map("tenant_id")
+  whazingInstanceId BigInt   @map("whazing_instance_id")
+  // Whazing queue ID; null = default/catch-all (no queue filter).
+  whazingQueueId    Int?     @map("whazing_queue_id")
+  agentId           BigInt?  @map("agent_id")
+  // Display name synced from Whazing.
+  name              String?
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  tenant   Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  instance WhazingInstance @relation(fields: [whazingInstanceId], references: [id], onDelete: Cascade)
+  agent    Agent?          @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, whazingInstanceId, whazingQueueId])
+  @@index([tenantId])
+  @@map("whazing_inboxes")
+}
+
 model Inbox {
   id                 BigInt   @id @default(autoincrement())
   tenantId           BigInt   @map("tenant_id")
@@ -515,6 +597,7 @@ model Agent {
   tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   toolSelections AgentToolSelection[]
   chatwootBots   ChatwootAgentBot[]
+  whazingInboxes WhazingInbox[]
 
   @@index([tenantId])
   @@map("agents")
