@@ -6,6 +6,7 @@ import {
   LibraryBig,
   LifeBuoy,
   MessagesSquare,
+  MessageSquare,
   RadioTower,
   ScrollText,
   Settings,
@@ -41,6 +42,7 @@ export interface NavItem {
 // t('nav.agents', 'Agents')
 // t('nav.resources', 'Components')
 // t('nav.channels', 'Channels')
+// t('nav.whazing', 'Whazing')
 // t('nav.webhooks', 'Webhooks')
 // t('nav.apiKeys', 'API keys')
 // t('nav.logs', 'Logs')
@@ -80,6 +82,13 @@ export const NAV_ITEMS: NavItem[] = [
     labelKey: "nav.channels",
     defaultLabel: "Channels",
     icon: RadioTower,
+    requireAdmin: true,
+  },
+  {
+    to: "/whazing",
+    labelKey: "nav.whazing",
+    defaultLabel: "Whazing",
+    icon: MessageSquare,
     requireAdmin: true,
   },
   {

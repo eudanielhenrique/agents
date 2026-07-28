@@ -105,7 +105,7 @@ async function recordDelivery(
       db.whazingWebhookDelivery.create({
         data: {
           tenantId,
-          whazingInstanceId: instanceId,
+          instanceId,
           deliveryId,
           event,
           status: "PENDING",
@@ -118,7 +118,7 @@ async function recordDelivery(
     if (!isUniqueViolation(err)) throw err;
     const existing = await runScopedOn(base, sysCtx(tenantId), (db) =>
       db.whazingWebhookDelivery.findFirst({
-        where: { whazingInstanceId: instanceId, deliveryId },
+        where: { instanceId, deliveryId },
         select: { id: true },
       }),
     );

@@ -14,6 +14,9 @@ import { auditController } from "@/api/v1/audit.controller";
 import { businessHoursController } from "@/api/v1/business-hours.controller";
 import { chatwootController } from "@/api/v1/chatwoot.controller";
 import { chatwootAdminController } from "@/api/v1/chatwoot-admin.controller";
+import { whazingController } from "@/api/v1/whazing.controller";
+import { whazingInboxesController } from "@/api/v1/whazing-inboxes.controller";
+import { whazingWebhookController } from "@/api/v1/whazing-webhook.controller";
 import { experimentsController } from "@/api/v1/experiments.controller";
 import { integrationsController } from "@/api/v1/integrations.controller";
 import { integrationsAdminController } from "@/api/v1/integrations-admin.controller";
@@ -249,6 +252,9 @@ const api = new Elysia()
   .use(mcpMeController)
   .use(mcpAdminController)
   .use(chatwootController)
-  .use(chatwootAdminController);
+  .use(chatwootAdminController)
+  .use(whazingController)
+  .use(whazingInboxesController)
+  .use(whazingWebhookController);
 
 export default api;

@@ -25,6 +25,7 @@ import { AdminTenantsPage } from "@/client/pages/admin/AdminTenantsPage";
 import { AdminUsersPage } from "@/client/pages/admin/AdminUsersPage";
 import { AgentEditorPage } from "@/client/pages/agents/AgentEditorPage";
 import { ChannelsPage } from "@/client/pages/ChannelsPage";
+import { WhazingPage } from "@/client/pages/whazing/WhazingPage";
 import { ConversationDetailPage } from "@/client/pages/ConversationDetailPage";
 import { ConversationsPage } from "@/client/pages/ConversationsPage";
 import { DashboardPage } from "@/client/pages/DashboardPage";
@@ -147,6 +148,14 @@ export function App() {
                                 element={
                                   <ProtectedRoute requireAdmin>
                                     <ChannelsPage />
+                                  </ProtectedRoute>
+                                }
+                              />
+                              <Route
+                                path="/whazing"
+                                element={
+                                  <ProtectedRoute requireAdmin>
+                                    <WhazingPage />
                                   </ProtectedRoute>
                                 }
                               />

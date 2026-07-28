@@ -18,7 +18,6 @@ import {
 } from "@/graph/prepare";
 import type { RunAgentTurnOutcome } from "@/graph/runtime";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import { buildNativeTools } from "@/graph/tools/native";
 import { resolveWhazingGraphThreadId } from "./thread-keys";
 import { loadWhazingClient } from "./instance";
 import type { NormalizedWhazingEvent } from "./types";
@@ -57,13 +56,13 @@ export async function runWhazingAgentTurn(
   const inbox = await runScopedOn(base, sysCtx(tenantId), async (db) => {
     if (event.queueId != null) {
       const specific = await db.whazingInbox.findFirst({
-        where: { tenantId, whazingInstanceId: instanceId, whazingQueueId: event.queueId },
+        where: { tenantId, instanceId, whazingQueueId: String(event.queueId) },
         select: { agentId: true },
       });
       if (specific) return specific;
     }
     return db.whazingInbox.findFirst({
-      where: { tenantId, whazingInstanceId: instanceId, whazingQueueId: null },
+      where: { tenantId, instanceId, whazingQueueId: null },
       select: { agentId: true },
     });
   });

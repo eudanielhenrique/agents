@@ -42,10 +42,10 @@ export async function resolveInstanceByRouteToken(
   token: string,
   base: PrismaClient = basePrisma,
 ): Promise<ResolvedWhazingInstance | null> {
-  const webhookRouteTokenHash = hashRouteToken(token);
+  const routeTokenHash = hashRouteToken(token);
   const row = await asSuperAdminOn(base, (db) =>
     db.whazingInstance.findUnique({
-      where: { webhookRouteTokenHash },
+      where: { routeTokenHash },
       select: { id: true, tenantId: true, disconnectedAt: true },
     }),
   );

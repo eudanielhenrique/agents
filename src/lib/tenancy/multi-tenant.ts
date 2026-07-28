@@ -15,6 +15,9 @@ type TransactionCapable = Pick<PrismaClient, "$extends" | "$transaction">;
 const TENANT_SCOPED_MODELS = new Set<string>([
   "ChatwootInstance",
   "ChatwootWebhookDelivery",
+  "WhazingInstance",
+  "WhazingInbox",
+  "WhazingWebhookDelivery",
   "Inbox",
   "Contact",
   "Conversation",
