@@ -190,6 +190,21 @@ export async function disconnectWhazingInstance(
   return toInstanceDto(row);
 }
 
+export async function reconnectWhazingInstance(
+  ctx: TenantContext,
+  id: bigint,
+  db: PrismaClient = basePrisma,
+): Promise<WhazingInstanceDto> {
+  const row = await runScopedOn(db, ctx, (scoped) =>
+    scoped.whazingInstance.update({
+      where: { id },
+      data: { disconnectedAt: null },
+      select: INSTANCE_SELECT,
+    }),
+  );
+  return toInstanceDto(row);
+}
+
 // ── inboxes ───────────────────────────────────────────────────────────────────
 
 const INBOX_SELECT = {

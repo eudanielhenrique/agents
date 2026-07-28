@@ -9,6 +9,7 @@ import {
   disconnectWhazingInstance,
   getWhazingInstance,
   listWhazingInstances,
+  reconnectWhazingInstance,
   updateWhazingInstance,
 } from "@/modules/whazing/management";
 
@@ -162,7 +163,28 @@ export const whazingController = new Elysia({
       }),
       detail: doc(
         "Disconnect Whazing instance",
-        "Soft-disconnect the instance by setting disconnectedAt; rows are kept for history. Reconnect by clearing disconnectedAt (not yet exposed in this API).",
+        "Soft-disconnect the instance by setting disconnectedAt; rows are kept for history.",
+      ),
+      response: errors(400, 401, 403, 404),
+    },
+  )
+  .post(
+    "/instances/:id/reconnect",
+    async ({ tenantContext, params }) => ({
+      instance: instanceIdentity,
+      whazingInstance: await reconnectWhazingInstance(
+        ctxOrThrow(tenantContext),
+        BigInt(params.id),
+      ),
+    }),
+    {
+      requireRole: "TENANT_ADMIN",
+      params: t.Object({
+        id: t.String({ description: "Whazing instance id (BigInt string)." }),
+      }),
+      detail: doc(
+        "Reconnect Whazing instance",
+        "Clear disconnectedAt to resume webhook processing for a previously disconnected instance.",
       ),
       response: errors(400, 401, 403, 404),
     },

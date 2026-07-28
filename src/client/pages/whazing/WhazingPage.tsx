@@ -6,6 +6,7 @@ import {
   ExternalLink,
   Loader2,
   Pencil,
+  PlugZap,
   Plus,
   RadioTower,
   Trash2,
@@ -369,6 +370,24 @@ export function WhazingPage() {
     }
   }
 
+  // ── Reconnect instance ────────────────────────────────────────────────────
+
+  async function reconnect(inst: WhazingInstance) {
+    try {
+      // biome-ignore lint/suspicious/noExplicitAny: Eden Treaty type regenerates after build
+      const res = await (api.api.v1.whazing.instances({ id: inst.id }) as any)
+        .reconnect.post();
+      if (res.error) throw res.error;
+      showToast(t("whazing.reconnected", "Instance reconnected."), "success");
+      await load();
+    } catch {
+      showToast(
+        t("whazing.reconnectError", "Could not reconnect."),
+        "error",
+      );
+    }
+  }
+
   // ── Add inbox ─────────────────────────────────────────────────────────────
 
   function openAddInbox(instanceId: string) {
@@ -600,7 +619,18 @@ export function WhazingPage() {
                           <Pencil className="h-4 w-4" aria-hidden="true" />
                         </button>
                       </Tooltip>
-                      {!disconnected && (
+                      {disconnected ? (
+                        <Tooltip content={t("whazing.reconnect", "Reconnect instance")}>
+                          <button
+                            type="button"
+                            onClick={() => void reconnect(inst)}
+                            aria-label={t("whazing.reconnect", "Reconnect instance")}
+                            className="inline-flex shrink-0 items-center justify-center rounded p-1.5 text-text-muted transition-colors hover:bg-success/10 hover:text-success"
+                          >
+                            <PlugZap className="h-4 w-4" aria-hidden="true" />
+                          </button>
+                        </Tooltip>
+                      ) : (
                         <Tooltip content={t("whazing.disconnect", "Disconnect instance")}>
                           <button
                             type="button"
