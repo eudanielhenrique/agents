@@ -1,4 +1,4 @@
-import type { ChatwootClient } from "@/modules/chatwoot/client";
+import type { InboxReplyClient } from "@/lib/transport/inbox-client";
 import { type FlowContext, withFlowStage } from "@/modules/flowlog/service";
 
 // Humanized delivery: split the agent's reply into several balloons and pace them with a typing
@@ -107,7 +107,7 @@ const realSleep = (ms: number): Promise<void> =>
 // Sends the reply, split + paced when enabled. Typing toggles are best-effort (admin-token, may be
 // unsupported on a channel) and never block the send. The sleep is injectable for tests.
 export async function deliverReply(
-  client: ChatwootClient,
+  client: InboxReplyClient,
   conversationId: number,
   reply: string,
   cfg: SplitConfig,

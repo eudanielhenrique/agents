@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ChatwootClient } from "@/modules/chatwoot/client";
+import type { InboxReplyClient } from "@/lib/transport/inbox-client";
 import {
   deliverReply,
   readSplitConfig,
@@ -73,7 +73,7 @@ describe("deliverReply", () => {
         rec.typing.push(on);
         return {};
       },
-    } as unknown as ChatwootClient;
+    } as unknown as InboxReplyClient;
   }
   const noSleep = async () => {};
 
