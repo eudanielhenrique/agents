@@ -135,9 +135,10 @@ export class WhazingClient implements InboxReplyClient {
 }
 
 // SSRF-validated factory. Called by loadWhazingClient (instance.ts) after decrypting credentials.
+// allowHttp: Whazing instances may run on HTTP (local or private networks).
 export async function createWhazingClient(
   config: WhazingClientConfig,
 ): Promise<WhazingClient> {
-  await assertSafeOutboundUrl(config.baseUrl);
+  await assertSafeOutboundUrl(config.baseUrl, { allowHttp: true });
   return new WhazingClient(config);
 }

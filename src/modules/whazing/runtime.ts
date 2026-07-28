@@ -17,15 +17,14 @@ import {
   type ToolBuildDeps,
 } from "@/graph/prepare";
 import type { RunAgentTurnOutcome } from "@/graph/runtime";
-import type { StructuredToolInterface } from "@langchain/core/tools";
 import { resolveWhazingGraphThreadId } from "./thread-keys";
 import { loadWhazingClient } from "./instance";
+import { buildWhazingNativeTools } from "./tools";
 import type { NormalizedWhazingEvent } from "./types";
 
 // Whazing agent runtime. Parallel to runAgentTurn in src/graph/runtime.ts but transport-aware:
 // uses WhazingClient instead of ChatwootClient, resolves the inbox via WhazingInbox (not
-// Chatwoot Inbox), and skips native Chatwoot tools (TODO: replace with Whazing-native tools
-// in issue #8: handoff/close/tags).
+// Chatwoot Inbox), and injects Whazing-native tools (handoff/close/note — see tools.ts).
 //
 // loadAgentConfig is still called with instanceId=0 and conversationId=ticketId. The chatwoot
 // conv query returns null (no such row), so contact/inbox prompt vars are empty for now — a
@@ -111,12 +110,18 @@ export async function runWhazingAgentTurn(
 
   const client = await loadWhazingClient(tenantId, instanceId, base);
 
-  // buildToolset with no native tools (Whazing-native tools: TODO #8).
-  // The cast is safe: ctx.client is used inside buildToolset only for slow-tool acks
-  // (sendMessage + toggleTyping — both in InboxReplyClient), and buildNativeTools is
-  // a no-op stub that ignores its client argument entirely.
-  const noNativeTools: ToolBuildDeps["buildNativeTools"] = () =>
-    [] as StructuredToolInterface[];
+  // buildToolset with Whazing-native tools. The ctx.client cast is safe: buildToolset
+  // uses it only for slow-tool acks (sendMessage + toggleTyping — both in InboxReplyClient).
+  // buildNativeTools ignores ctx.client entirely; instead, it closes over the actual
+  // WhazingClient and ticketId via the outer closure.
+  const whazingNativeTools: ToolBuildDeps["buildNativeTools"] = (
+    _ctx,
+    allowed,
+  ) =>
+    buildWhazingNativeTools(
+      { client, ticketId, timezone: loaded.timezone },
+      allowed,
+    );
   const tools = await buildToolset(
     loaded,
     {
@@ -127,7 +132,7 @@ export async function runWhazingAgentTurn(
       conversationId: ticketId,
       threadId,
     },
-    { buildNativeTools: noNativeTools, flow },
+    { buildNativeTools: whazingNativeTools, flow },
   );
 
   const checkpointer = await getCheckpointer();
