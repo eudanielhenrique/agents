@@ -66,12 +66,7 @@ export async function receiveWhazingWebhook(
 
   const normalized = normalizeWhazingEvent(parsed);
   // Unknown event type or malformed payload — ack without recording; nothing to process.
-  // TODO: remove after confirming Whazing payload shape
-  if (!normalized) {
-    const p = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
-    logger.warn("whazing webhook ignored: top-level keys=%s event=%s", Object.keys(p).join(","), p.event);
-    return { ack: true, outcome: "ignored" };
-  }
+  if (!normalized) return { ack: true, outcome: "ignored" };
 
   // Delivery id: prefer the message id (stable across retries), fall back to body digest.
   const deliveryId = whazingDeliveryId(

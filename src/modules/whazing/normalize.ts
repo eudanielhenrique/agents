@@ -76,50 +76,82 @@ function normalizeMessage(raw: unknown): NormalizedWhazingMessage | null {
 }
 
 // Normalizes a raw Whazing webhook payload into our internal shape.
-// Returns null for unsupported or malformed payloads (unknown event type, missing ticketId).
+// Supports two shapes:
+//   (A) Standard: { event, message: {...}, ticket: {...}, contact: {...} }
+//   (B) Whazing flat: { messageId, messageBody, fromMe, ticket: {...}, contact: {...} }
+//       — no `event` field; message data lives at the top level.
+// Returns null for unsupported or malformed payloads (no recognizable event).
 export function normalizeWhazingEvent(
   raw: unknown,
 ): NormalizedWhazingEvent | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
 
-  const event = str(r.event);
-  if (!event) return null;
+  // Shape (A): explicit event field.
+  // Shape (B): Whazing flat payload — infer "message_received" from presence of messageId/messageBody.
+  let event = str(r.event);
+  if (!event) {
+    if (r.messageId != null || r.messageBody != null) {
+      event = "message_received";
+    } else {
+      return null;
+    }
+  }
 
-  // Ticket fields may be top-level or nested under `ticket`
+  // Ticket nested object (present in both shapes).
   const ticket =
     r.ticket && typeof r.ticket === "object"
       ? (r.ticket as Record<string, unknown>)
       : null;
 
   const ticketId =
-    coerceNum(r.ticketId) ?? coerceNum(r.id) ?? coerceNum(ticket?.id);
+    coerceNum(r.ticketId) ?? coerceNum(ticket?.id) ?? coerceNum(r.id);
   const queueId = coerceNum(r.queueId) ?? coerceNum(ticket?.queueId);
-  const assignedUserId =
-    coerceNum(r.assignedUserId) ?? coerceNum(ticket?.assignedUserId);
 
-  const rawStatus = str(r.status) ?? str(ticket?.status);
+  // assignedUserId: prefer explicit fields; ignore `user` object (may be the bot itself).
+  const assignedUserId =
+    coerceNum(r.assignedUserId) ?? coerceNum(ticket?.assignedUserId) ?? null;
+
+  // Ticket status from nested ticket first, fall back to top-level (which may be message status).
+  const rawStatus = str(ticket?.status) ?? str(r.status);
   const status: WhazingTicketStatus | null =
     rawStatus === "open" || rawStatus === "pending" || rawStatus === "closed"
       ? rawStatus
       : null;
 
-  // Contact may be top-level, inside ticket, or inside message
-  const rawContact =
-    r.contact ?? ticket?.contact ?? (r.message as Record<string, unknown> | undefined)?.contact;
+  // Contact from top-level or nested in ticket.
+  const rawContact = r.contact ?? ticket?.contact;
   const contact = normalizeContact(rawContact);
 
-  const message = normalizeMessage(r.message);
+  // Shape (A): message in r.message.
+  // Shape (B): message fields at root — messageId, messageBody, fromMe, mediaType, mediaUrl.
+  let message: NormalizedWhazingMessage | null;
+  if (r.message && typeof r.message === "object") {
+    message = normalizeMessage(r.message);
+  } else if (r.messageId != null || r.messageBody != null) {
+    const attachments: NormalizedWhazingAttachment[] = [];
+    if (r.mediaType || r.mediaUrl) {
+      attachments.push({
+        id: null,
+        mediaType: str(r.mediaType),
+        mediaUrl: str(r.mediaUrl) ?? str(r.mediaBase64 ? "data:" : null),
+        mimeType: null,
+        fileName: null,
+      });
+    }
+    message = {
+      id: str(r.messageId),
+      body: str(r.messageBody),
+      fromMe: r.fromMe === true || r.fromMe === "true",
+      isAutomation: false,
+      attachments,
+      timestamp: coerceNum(r.timestamp),
+    };
+  } else {
+    message = null;
+  }
 
-  return {
-    event,
-    ticketId,
-    queueId,
-    assignedUserId,
-    status,
-    contact,
-    message,
-  };
+  return { event, ticketId, queueId, assignedUserId, status, contact, message };
 }
 
 // Returns true when the event is a new message from the customer that the bot should evaluate.
