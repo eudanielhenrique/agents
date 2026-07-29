@@ -38,6 +38,16 @@ cd /opt/fazer-ai/agents && docker compose --env-file agents.env -f compose.agent
 
 ---
 
+## IDs das conversas (CRÍTICO para frontend e realtime)
+
+- Chatwoot: `c_{bigint}` (ex: `c_42`)
+- Whazing: `w_{bigint}` (ex: `w_7`)
+- Cursor de paginação: `t:{unixMs}` (mudou de BigInt puro para cross-transport)
+- `broadcastConversationEvent` e `broadcastAgentActivity` emitem `c_` prefix agora
+- Controller: `parseConvId()` em `v1.controller.ts` faz o roteamento por prefixo
+
+---
+
 ## Whazing — O que está implementado
 
 ### Client (`src/modules/whazing/client.ts`)
@@ -45,13 +55,14 @@ cd /opt/fazer-ai/agents && docker compose --env-file agents.env -f compose.agent
 Métodos disponíveis:
 - `sendMessage(ticketId, text)` — POST `/` (enviar mensagem)
 - `sendPrivateNote(ticketId, text)` — POST `/` com flag
-- `sendFile(ticketId, file, ...)` — multipart upload
+- `sendAudioMessage(...)` — multipart upload de áudio
 - `toggleTyping(ticketId, on)` — stub (não suportado)
-- `getTicket(ticketId)` — GET `/ticket/:id`
+- `getTicket(ticketId)` — GET `/ticket/:id` (lista mensagens do ticket)
 - `assignTicketToUser(ticketId, userId)` — POST `/updateticketinfo`
 - `assignTicketToQueue(ticketId, queueId)` — POST `/updatequeue`
 - `closeTicket(ticketId)` — POST `/updateticketinfo` status=closed
 - `setContactTags(contactId, tags)` — POST `/updatetag`
+- `downloadMedia(url)` — GET com Bearer token (proxy de mídia)
 - `kanbanGetBoards()` — GET `/kanbanpro/boards`
 - `kanbanGetColumns(boardId)` — GET `/kanbanpro/boards/:id/columns`
 - `kanbanCreateOrMove(params)` — POST `/kanbanpro/card`
@@ -73,8 +84,10 @@ Ferramentas disponíveis na runtime Whazing:
 
 ### Runtime (`src/modules/whazing/runtime.ts`)
 
+- Upserta `WhazingConversation` antes de executar o turn (para a trail e Conversations page)
+- Define `FlowContext.conversationId = whazingConvId` (trail markers linkados)
 - Passa `contactId: event.contact?.id` para o ctx das tools
-- Chama `loadAgentConfig({ instanceId: BigInt(0), conversationId: ticketId })` — prompt vars de contato/inbox ficam vazias (TODO)
+- Chama `loadAgentConfig({ instanceId: BigInt(0), conversationId: ticketId })` — prompt vars de contato/inbox ficam vazias (TODO: `{{canal}}`)
 
 ### Webhook receiver
 
@@ -82,6 +95,60 @@ Mounted: `/api/v1/whazing/webhook/:routeToken`
 Idempotency: `WhazingWebhookDelivery`
 Gate: `shouldWhazingBotHandle`
 Routing: `WhazingInbox` → `agentId` (catch-all partial unique index)
+
+---
+
+## WhazingConversation (mirror table)
+
+Migration: `prisma/migrations/20260729000001_whazing_conversations/`
+
+Campos-chave:
+- `instanceId`, `ticketId`, `threadId` — identificação
+- `status` — mapeado: Whazing `"closed"` → `"resolved"`
+- `assignedUserId`, `contactId`, `contactName` — denormalizados (sem join)
+- `agentId` — qual agente respondeu
+- `lastEventAt`, `lastInboundAt` — para ordenação na lista
+- `lastError`, `lastErrorAt` — erro do último turn (para o badge de erro)
+- Unique constraint: `(tenantId, instanceId, ticketId)`
+
+---
+
+## Conversations page — Dual transport
+
+### `listConversations` (`src/modules/conversations/service.ts`)
+
+- Busca `take+1` de cada fonte (Chatwoot `Conversation` + Whazing `WhazingConversation`)
+- Merge e sort por `lastEventAt DESC`
+- Retorna IDs prefixados: `c_<id>` e `w_<id>`
+- Cursor: `t:{unixMs}` (mais antigo que esse timestamp vai para a próxima página)
+
+### `getWhazingConversationDetail`
+
+- Carrega mirror row + agent info + trail (ExecutionLog)
+- `followUp: null`, `appointmentReminders: []` (não aplicável)
+- `transport: "whazing"`, `whazingBaseUrl`, `whazingTicketId`
+
+### `getWhazingConversationMessages`
+
+- Chama `client.getTicket(ticketId)` → normaliza para `ConversationMessage[]`
+- `fromMe: true` → `messageType: 1` (outgoing), `fromMe: false` → `messageType: 0` (incoming)
+- Falha graceful: retorna `{ messagesUnavailable: true }`
+
+### `getWhazingConversationMedia`
+
+- Origin-lock: URL deve ser do mesmo origin que `WhazingInstance.baseUrl`
+- Proxy com `client.downloadMedia(url)` (Bearer token)
+
+### ConversationDetailPage — Transport-aware
+
+- Botões de ação (handoff, return, resolve, reengage) **ocultos** para `transport === "whazing"`
+- "Open in Whazing" link: `${whazingBaseUrl}/ticket/${whazingTicketId}`
+- Mensagens indisponíveis: mostra retry + link "Open in Whazing"
+- Trail (execution logs) funciona normalmente para ambos os transportes
+
+### Write ops no Whazing — MVP limitation
+
+Controller retorna 400 para: reply, handoff, return, reengage, status. Read-only por enquanto.
 
 ---
 
@@ -105,43 +172,25 @@ interface KanbanWhazingBoard {
 
 Salvo em `agent.settings.kanban.whazingBoard`.
 
-### Injeção no runtime (`src/graph/prepare.ts`)
+### Runtime (`src/graph/prepare.ts`)
 
-Se `cfg.kanbanConfig.whazingBoard` está presente, injeta nas `toolInstructions` do `kanban_move_card`:
-```
-Whazing Kanban board: "<boardName>" (boardId: <id>).
-Available columns:
-  • <name> (columnId: <id>)
-  ...
-```
-
-### Editor (`ToolGrantsEditor.tsx`)
-
-Board picker na seção Kanban (quando agente tem instância Whazing):
-1. Dropdown de instância (auto-seleciona se só 1)
-2. Dropdown de boards (lazy-load da API)
-3. Lista de colunas com ID badges
-4. Textarea para instruções adicionais
+Se `cfg.kanbanConfig.whazingBoard` está presente, injeta nas `toolInstructions` do `kanban_move_card`.
 
 ---
 
 ## Whazing API Pro — Cobertura atual
 
-| Recurso | Endpoint | Status |
-|---------|----------|--------|
-| Kanban Pro — criar/mover card | `POST /kanbanpro/card` | ✅ tool + client |
-| Kanban Pro — atualizar card | `PUT /kanbanpro/card/:id` | ✅ tool + client |
-| Kanban Pro — listar boards | `GET /kanbanpro/boards` | ✅ client + proxy |
-| Kanban Pro — listar colunas | `GET /kanbanpro/boards/:id/columns` | ✅ client + proxy |
-| Tags no contato | `POST /updatetag` | ✅ client (sem tool nativa ainda) |
-| Atribuir à fila | `POST /updatequeue` | ✅ client + handoff tool |
-| Atribuir a usuário | `POST /updateticketinfo` | ✅ client + handoff tool |
-| Fechar ticket | `POST /updateticketinfo status=closed` | ✅ tool `close_conversation` |
-| API Plus (listas, botões) | `POST /apiplus` | ❌ não implementado |
-| API Oficial (HSM templates) | `POST /apioficial` | ❌ não implementado |
-| CRM / pipeline | `POST /updatecrm` | ❌ não implementado |
-| Follow-up agendado | `POST /updatefollowup` | ❌ não implementado |
-| Listar filas | `GET /queue` | ❌ 403 via External API |
+| Recurso | Status |
+|---------|--------|
+| Kanban Pro — criar/mover card | ✅ tool + client |
+| Kanban Pro — atualizar card | ✅ tool + client |
+| Kanban Pro — listar boards/colunas | ✅ client + proxy |
+| Tags no contato | ✅ client (sem tool nativa ainda) |
+| Atribuir à fila | ✅ client + handoff tool |
+| Atribuir a usuário | ✅ client + handoff tool |
+| Fechar ticket | ✅ tool `close_conversation` |
+| API Plus (listas, botões) | ❌ não implementado |
+| API Oficial (HSM templates) | ❌ não implementado |
 
 ---
 
@@ -160,6 +209,15 @@ Injetado nas `toolInstructions` do `handoff_to_human` via `src/graph/prepare.ts`
 A variável `{{canal}}` vem do `loadAgentConfig` que lê o nome do inbox Chatwoot.
 No Whazing, `loadAgentConfig` é chamado com `instanceId: BigInt(0)` → prompt vars vazias.
 Para implementar: popular `{{canal}}` com `WhazingInstance.name` ou `WhazingInbox.name`.
+
+### Deploy da migration no VPS
+
+O migration `20260729000001_whazing_conversations` precisa rodar no VPS.
+Roda automaticamente no boot via `migrate deploy` durante o `docker build + compose up`.
+
+### Write ops no console Whazing (futuro)
+
+Atualmente read-only. Para habilitar: implementar `replyToWhazingConversation` etc. usando `WhazingClient`.
 
 ---
 
@@ -196,9 +254,10 @@ Features Pro-only usam stubs que jogam `ProEditionError`. O swap Free↔Full é 
 
 ---
 
-## Commits recentes relevantes
+## Commits recentes
 
 ```
+b71c5b6 feat(conversations): add Whazing transport support to Conversations page
 7cef9ee feat(whazing/kanban): board + column picker in agent editor
 026745b feat(whazing/kanban): add Whazing Kanban Pro native tools
 9e01482 feat(tools): filter Chatwoot-only native tools and add Whazing Queue ID handoff config
