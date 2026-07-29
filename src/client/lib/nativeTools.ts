@@ -1,13 +1,18 @@
 import type { TFunction } from "i18next";
 import {
   ArrowRightLeft,
+  Banknote,
   BellOff,
   Calculator,
   CheckCircle2,
   Clock,
+  GalleryHorizontal,
   LayoutGrid,
+  List,
   type LucideIcon,
   Mic,
+  MousePointerClick,
+  QrCode,
   Smile,
   SquarePen,
   StickyNote,
@@ -32,6 +37,11 @@ export const NATIVE_TOOL_ICONS: Record<string, LucideIcon> = {
   skip_reply: BellOff,
   calculator: Calculator,
   get_current_time: Clock,
+  send_button_message: MousePointerClick,
+  send_list_message: List,
+  send_carousel_message: GalleryHorizontal,
+  send_pix_button: QrCode,
+  request_payment: Banknote,
 };
 
 export interface NativeToolMeta {
@@ -150,6 +160,51 @@ export function nativeToolMeta(name: string, t: TFunction): NativeToolMeta {
         description: t(
           "nativeTools.get_current_time.desc",
           "Get the current date and time in the agent's timezone.",
+        ),
+      };
+    case "send_button_message":
+      return {
+        icon,
+        label: t("nativeTools.send_button_message.label", "Send buttons"),
+        description: t(
+          "nativeTools.send_button_message.desc",
+          "Send up to 3 quick-reply buttons the customer can tap instead of typing.",
+        ),
+      };
+    case "send_list_message":
+      return {
+        icon,
+        label: t("nativeTools.send_list_message.label", "Send list"),
+        description: t(
+          "nativeTools.send_list_message.desc",
+          "Send a scrollable menu of grouped options (more than 3 choices, or with descriptions).",
+        ),
+      };
+    case "send_carousel_message":
+      return {
+        icon,
+        label: t("nativeTools.send_carousel_message.label", "Send carousel"),
+        description: t(
+          "nativeTools.send_carousel_message.desc",
+          "Send a horizontally-scrollable carousel of cards (image + text + choices) for products or plans.",
+        ),
+      };
+    case "send_pix_button":
+      return {
+        icon,
+        label: t("nativeTools.send_pix_button.label", "Send PIX key"),
+        description: t(
+          "nativeTools.send_pix_button.desc",
+          "Send a 'copy PIX key' button with the configured PIX key below.",
+        ),
+      };
+    case "request_payment":
+      return {
+        icon,
+        label: t("nativeTools.request_payment.label", "Request payment"),
+        description: t(
+          "nativeTools.request_payment.desc",
+          "Send a payment-request card for a specific amount, payable via the configured PIX key.",
         ),
       };
     default:

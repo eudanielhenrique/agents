@@ -4,7 +4,13 @@ import type { DiscoveredMcpTool } from "@/client/components/mcp/DiscoveredMcpToo
 import { SectionNav } from "./SectionNav";
 import { TabActionBar } from "./TabActionBar";
 import { ToolGrantsEditor } from "./ToolGrantsEditor";
-import type { GrantState, HandoffUiState, KanbanWhazingBoardState, ToolCatalog } from "./types";
+import type {
+  GrantState,
+  HandoffUiState,
+  KanbanWhazingBoardState,
+  ToolCatalog,
+  WhazingPixUiState,
+} from "./types";
 
 interface ToolsTabProps {
   agentId: string;
@@ -20,6 +26,8 @@ interface ToolsTabProps {
   setKanbanInstructions: (v: string) => void;
   kanbanWhazingBoard: KanbanWhazingBoardState | null;
   setKanbanWhazingBoard: React.Dispatch<React.SetStateAction<KanbanWhazingBoardState | null>>;
+  whazingPix: WhazingPixUiState | null;
+  setWhazingPix: React.Dispatch<React.SetStateAction<WhazingPixUiState | null>>;
   customAttributeInstructions: string;
   setCustomAttributeInstructions: (v: string) => void;
   labelInstructions: string;
@@ -65,6 +73,8 @@ export function ToolsTab({
   setKanbanInstructions,
   kanbanWhazingBoard,
   setKanbanWhazingBoard,
+  whazingPix,
+  setWhazingPix,
   customAttributeInstructions,
   setCustomAttributeInstructions,
   labelInstructions,
@@ -130,6 +140,8 @@ export function ToolsTab({
             setKanbanInstructions={setKanbanInstructions}
             kanbanWhazingBoard={kanbanWhazingBoard}
             setKanbanWhazingBoard={setKanbanWhazingBoard}
+            whazingPix={whazingPix}
+            setWhazingPix={setWhazingPix}
             customAttributeInstructions={customAttributeInstructions}
             setCustomAttributeInstructions={setCustomAttributeInstructions}
             labelInstructions={labelInstructions}

@@ -17,6 +17,8 @@ import {
   type ToolBuildDeps,
 } from "@/graph/prepare";
 import type { RunAgentTurnOutcome } from "@/graph/runtime";
+import { Langfuse } from "langfuse-langchain";
+import { resolveLangfuseConfig, type LangfuseConfig } from "@/graph/observability";
 import { resolveWhazingGraphThreadId } from "./thread-keys";
 import { loadWhazingClient } from "./instance";
 import { resolveWhazingSttConfig, transcribeWhazingAudio } from "./media";
@@ -82,6 +84,97 @@ async function upsertWhazingConversation(
     }),
   );
   return row.id as bigint;
+}
+
+// Sync the full conversation history from the Whazing ticket into Langfuse.
+// This creates/updates a trace with all messages (customer + agent) so the
+// Langfuse UI shows the complete conversation context, not just the current turn.
+async function syncWhazingHistoryToLangfuse(
+  client: { getTicket: (ticketId: number) => Promise<unknown> },
+  ticketId: number,
+  traceId: string,
+  contactName: string | null | undefined,
+  base: PrismaClient,
+  tenantId: bigint,
+): Promise<void> {
+  try {
+    // Resolve the tenant's Langfuse config from the vault
+    const cfg = await runScopedOn(base, { tenantId, userId: null, role: "TENANT_ADMIN" }, (db) =>
+      resolveLangfuseConfig(db, tenantId),
+    );
+    if (!cfg) return;
+
+    // Create a Langfuse client (cached per tenant+config via the SDK's internal cache)
+    const lf = new Langfuse({
+      publicKey: cfg.publicKey,
+      secretKey: cfg.secretKey,
+      baseUrl: cfg.baseUrl,
+    });
+
+    const ticket = await client.getTicket(ticketId).catch(() => null);
+    if (!ticket || typeof ticket !== "object") return;
+
+    const t = ticket as Record<string, unknown>;
+    const messages = (t.messages ?? t.data?.messages ?? []) as Array<{
+      body?: string;
+      messageBody?: string;
+      fromMe?: boolean;
+      sendType?: string;
+      createdAt?: string;
+      updatedAt?: string;
+      id?: number;
+    }>;
+
+    if (!Array.isArray(messages) || messages.length === 0) return;
+
+    // Build the conversation history as alternating user/assistant messages.
+    const history: Array<{ role: "user" | "assistant"; content: string }> = [];
+    for (const msg of messages) {
+      const text = msg.body ?? msg.messageBody ?? "";
+      if (!text) continue;
+      // fromMe=true → agent reply; fromMe=false → customer message
+      const role = msg.fromMe ? "assistant" : "user";
+      history.push({ role, content: text });
+    }
+
+    if (history.length === 0) return;
+
+    // Create/update the Langfuse trace with the full history.
+    const firstUserMsg = history.find((m) => m.role === "user");
+    const lastAgentMsg = [...history].reverse().find((m) => m.role === "assistant");
+
+    const trace = lf.trace({
+      id: traceId,
+      name: "Whazing Conversation",
+      sessionId: `whazing-ticket-${ticketId}`,
+      userId: cfg.tenantSlug,
+      metadata: {
+        ticketId,
+        contactName: contactName ?? null,
+        messageCount: history.length,
+        source: "whazing",
+        tenantId: String(tenantId),
+      },
+      input: firstUserMsg?.content ?? "",
+      output: lastAgentMsg?.content ?? "",
+    });
+
+    // Add each message as an observation for full drill-down
+    for (let i = 0; i < history.length; i++) {
+      const msg = history[i];
+      trace?.event({
+        id: `msg-${i}`,
+        name: msg.role === "user" ? "Customer Message" : "Agent Reply",
+        input: msg.role === "user" ? msg.content : undefined,
+        output: msg.role === "assistant" ? msg.content : undefined,
+      });
+    }
+  } catch (err) {
+    logger.warn(
+      "whazing langfuse history sync failed (non-fatal): %s",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 }
 
 // Whazing agent runtime. Parallel to runAgentTurn in src/graph/runtime.ts but transport-aware:
@@ -189,6 +282,20 @@ export async function runWhazingAgentTurn(
 
   const client = await loadWhazingClient(tenantId, instanceId, base);
 
+  // Sync the full conversation history from Whazing into Langfuse so the
+  // trace shows the complete conversation, not just the current turn.
+  // Best-effort — never blocks the agent turn.
+  if (whazingConvId) {
+    syncWhazingHistoryToLangfuse(
+      client,
+      ticketId,
+      `whazing-conv-${whazingConvId}`,
+      event.contact?.name,
+      base,
+      tenantId,
+    ).catch(() => {});
+  }
+
   // Attempt STT for the first audio attachment (best-effort — never strands the delivery).
   let transcription: string | null = null;
   const sttCfg = await resolveWhazingSttConfig(tenantId, agentId, base);
@@ -236,6 +343,7 @@ export async function runWhazingAgentTurn(
         contactId: event.contact?.id ?? undefined,
         timezone: loaded.timezone,
         toolInstructions: nativeCtx.toolInstructions,
+        pixConfig: loaded.pixConfig,
       },
       allowed,
     );

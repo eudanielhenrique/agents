@@ -93,6 +93,7 @@ import type {
   ToolCatalog,
   ToolSelectionView,
   VaultEntry,
+  WhazingPixUiState,
 } from "./types";
 import { usePlaygroundChat } from "./usePlaygroundChat";
 
@@ -279,10 +280,18 @@ function readBehaviorState(a: Agent) {
       ? (rawBoard as import("./types").KanbanWhazingBoardState)
       : null;
 
+  // PIX config for send_pix_button / request_payment: { pixKey, pixName, pixType }
+  const rawPix = s.whazingPix;
+  const whazingPix =
+    rawPix && typeof rawPix === "object" && !Array.isArray(rawPix)
+      ? (rawPix as import("./types").WhazingPixUiState)
+      : null;
+
   return {
     transferWithSummary: a.transferWithSummary,
     kanbanInstructions: str(ka.instructions),
     kanbanWhazingBoard,
+    whazingPix,
     customAttributeInstructions: str(tg.set_custom_attribute),
     labelInstructions: str(tg.assign_label),
     updateKanbanTaskInstructions: str(tg.update_kanban_task),
@@ -641,6 +650,9 @@ export function AgentEditorPage() {
   const [kanbanInstructions, setKanbanInstructions] = useState("");
   const [kanbanWhazingBoard, setKanbanWhazingBoard] =
     useState<KanbanWhazingBoardState | null>(null);
+  // PIX key/name/type for send_pix_button + request_payment (Tools-tab config, like kanban).
+  // Persisted in agent.settings.whazingPix; synced only by syncToolConfig.
+  const [whazingPix, setWhazingPix] = useState<WhazingPixUiState | null>(null);
   // Operator usage guidance for set_custom_attribute + assign_label (Tools-tab config, like kanban).
   // Persisted in agent.settings.toolGuidance; synced only by syncToolConfig.
   const [customAttributeInstructions, setCustomAttributeInstructions] =
@@ -741,6 +753,7 @@ export function AgentEditorPage() {
     setHandoff(b.handoff);
     setKanbanInstructions(b.kanbanInstructions);
     setKanbanWhazingBoard(b.kanbanWhazingBoard ?? null);
+    setWhazingPix(b.whazingPix ?? null);
     setCustomAttributeInstructions(b.customAttributeInstructions);
     setLabelInstructions(b.labelInstructions);
     setUpdateKanbanTaskInstructions(b.updateKanbanTaskInstructions);
@@ -1774,6 +1787,7 @@ export function AgentEditorPage() {
           handoff: handoffJson,
           kanban: kanbanJson,
           toolGuidance: toolGuidanceJson,
+          whazingPix: whazingPix ?? null,
         },
         ...(patchExpected ? { expectedUpdatedAt: patchExpected } : {}),
       });
@@ -1794,6 +1808,7 @@ export function AgentEditorPage() {
         handoff: handoffJson,
         kanban: kanbanJson,
         toolGuidance: toolGuidanceJson,
+        whazingPix: whazingPix ?? null,
       }));
       markSynced(String(agentRes.data.agent.updatedAt));
       bumpSync("tools", "knowledge");
@@ -2383,6 +2398,8 @@ export function AgentEditorPage() {
                 setKanbanInstructions={setKanbanInstructions}
                 kanbanWhazingBoard={kanbanWhazingBoard}
                 setKanbanWhazingBoard={setKanbanWhazingBoard}
+                whazingPix={whazingPix}
+                setWhazingPix={setWhazingPix}
                 customAttributeInstructions={customAttributeInstructions}
                 setCustomAttributeInstructions={setCustomAttributeInstructions}
                 labelInstructions={labelInstructions}

@@ -16,6 +16,7 @@ import {
   Badge,
   Button,
   FormField,
+  Select,
   SelectableCard,
   SwitchField,
   Textarea,
@@ -36,7 +37,13 @@ import { cn } from "@/client/lib/utils";
 import { IntegrationEditModal } from "@/client/pages/resources/IntegrationEditModal";
 import { McpEditModal } from "@/client/pages/resources/McpEditModal";
 import { ToolEditModal } from "@/client/pages/resources/ToolEditModal";
-import type { GrantState, HandoffUiState, KanbanWhazingBoardState, ToolCatalog } from "./types";
+import type {
+  GrantState,
+  HandoffUiState,
+  KanbanWhazingBoardState,
+  ToolCatalog,
+  WhazingPixUiState,
+} from "./types";
 
 // Service-logo adapters so a toolpack integration shows its brand mark in the SelectableCard's
 // `icon` slot (which expects a LucideIcon). Module-level → stable identity (no remount per render).
@@ -79,6 +86,9 @@ const LABEL_TOOL = "assign_label";
 // update_kanban_task (edit the linked card's title/description/priority/dates) also takes optional
 // operator guidance, so it renders as a configurable card next to kanban_move_card.
 const UPDATE_KANBAN_TOOL = "update_kanban_task";
+// send_pix_button carries its PIX key/name/type (operator-set, never model-supplied — see
+// src/modules/whazing/payments.ts), so it renders as a configurable card too.
+const PIX_TOOL = "send_pix_button";
 
 // Tools that are Chatwoot-only and unavailable on Whazing. Hidden from the editor since the active
 // transport is Whazing. Kept in the allowlist catalog for back-compat if Chatwoot is re-enabled.
@@ -123,6 +133,10 @@ interface Props {
   // its model-facing description. Persisted in agent.settings.toolGuidance.update_kanban_task.
   updateKanbanTaskInstructions: string;
   setUpdateKanbanTaskInstructions: (v: string) => void;
+  // PIX key/name/type for send_pix_button + request_payment. Operator-set, never a model-supplied
+  // tool argument. null = not configured (the tools decline). Persisted in agent.settings.whazingPix.
+  whazingPix: WhazingPixUiState | null;
+  setWhazingPix: React.Dispatch<React.SetStateAction<WhazingPixUiState | null>>;
   // Discovered MCP tools + each server's `instructions` + per-connection collapse state. Lifted to
   // AgentEditorPage so switching agent tabs (which unmounts this editor) does not lose the discovery.
   mcpTools: Record<string, DiscoveredMcpTool[]>;
@@ -449,6 +463,8 @@ export function ToolGrantsEditor({
   setLabelInstructions,
   updateKanbanTaskInstructions,
   setUpdateKanbanTaskInstructions,
+  whazingPix,
+  setWhazingPix,
   mcpTools,
   setMcpTools,
   mcpInstructions,
@@ -573,6 +589,8 @@ export function ToolGrantsEditor({
   const kanbanEntry = visibleNative.find((n) => n.name === KANBAN_TOOL);
   const updateKanbanEnabled = selectedNative.has(UPDATE_KANBAN_TOOL);
   const updateKanbanEntry = visibleNative.find((n) => n.name === UPDATE_KANBAN_TOOL);
+  const pixEnabled = selectedNative.has(PIX_TOOL);
+  const pixEntry = visibleNative.find((n) => n.name === PIX_TOOL);
   // Chatwoot-only tools: always null since filtered out; kept for type-safety in unused card guards.
   const attrEnabled = false;
   const attrEntry = undefined;
@@ -587,7 +605,8 @@ export function ToolGrantsEditor({
       (handoff.instructions.trim() !== "" ||
         !transferWithSummary ||
         handoff.whazingQueueId.trim() !== "")) ||
-    (kanbanEnabled && (kanbanInstructions.trim() !== "" || kanbanWhazingBoard != null));
+    (kanbanEnabled && (kanbanInstructions.trim() !== "" || kanbanWhazingBoard != null)) ||
+    (pixEnabled && whazingPix != null);
 
 
   // Apply the deferred auto-grant for a just-created integration once it appears in the refreshed
@@ -1155,7 +1174,7 @@ export function ToolGrantsEditor({
       >
         <div className="grid gap-2 sm:grid-cols-2">
           {visibleNative
-            .filter((n) => n.name !== HANDOFF_TOOL)
+            .filter((n) => n.name !== HANDOFF_TOOL && n.name !== PIX_TOOL)
             .map((n) => {
               const meta = nativeToolMeta(n.name, t);
               return (
@@ -1432,6 +1451,71 @@ export function ToolGrantsEditor({
                   'e.g. Add "vip" to the contact for premium customers; tag the conversation "urgent" when the customer is upset.',
                 )}
               />
+            </FormField>
+          </ConfigurableToolCard>
+        )}
+        {pixEntry && (
+          <ConfigurableToolCard
+            selected={pixEnabled}
+            onToggle={() => toggleNative(PIX_TOOL)}
+            icon={nativeToolMeta(PIX_TOOL, t).icon}
+            title={nativeToolMeta(PIX_TOOL, t).label}
+            description={nativeToolMeta(PIX_TOOL, t).description}
+            configured={whazingPix != null}
+          >
+            <p className="text-text-muted text-xs">
+              {t(
+                "editor.pixHint",
+                "Used by both 'Send PIX key' and 'Request payment'. The AI never chooses or types this key — only what's configured here is ever sent.",
+              )}
+            </p>
+            <FormField label={t("editor.pixKey", "PIX key")}>
+              <input
+                type="text"
+                value={whazingPix?.pixKey ?? ""}
+                onChange={(e) =>
+                  setWhazingPix({
+                    pixKey: e.target.value,
+                    pixName: whazingPix?.pixName ?? "",
+                    pixType: whazingPix?.pixType ?? "CNPJ",
+                  })
+                }
+                placeholder={t("editor.pixKeyPlaceholder", "ex.: 11.071.697/0001-08")}
+                className="w-full rounded-lg border border-border bg-bg-secondary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50"
+              />
+            </FormField>
+            <FormField label={t("editor.pixName", "Recipient name")}>
+              <input
+                type="text"
+                value={whazingPix?.pixName ?? ""}
+                onChange={(e) =>
+                  setWhazingPix({
+                    pixKey: whazingPix?.pixKey ?? "",
+                    pixName: e.target.value,
+                    pixType: whazingPix?.pixType ?? "CNPJ",
+                  })
+                }
+                placeholder={t("editor.pixNamePlaceholder", "ex.: Empresa Ltda")}
+                className="w-full rounded-lg border border-border bg-bg-secondary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50"
+              />
+            </FormField>
+            <FormField label={t("editor.pixType", "Key type")}>
+              <Select
+                value={whazingPix?.pixType ?? "CNPJ"}
+                onChange={(e) =>
+                  setWhazingPix({
+                    pixKey: whazingPix?.pixKey ?? "",
+                    pixName: whazingPix?.pixName ?? "",
+                    pixType: e.target.value as WhazingPixUiState["pixType"],
+                  })
+                }
+              >
+                <option value="CPF">CPF</option>
+                <option value="CNPJ">CNPJ</option>
+                <option value="PHONE">{t("editor.pixTypePhone", "Telefone")}</option>
+                <option value="EMAIL">{t("editor.pixTypeEmail", "E-mail")}</option>
+                <option value="EVP">{t("editor.pixTypeEvp", "Chave aleatória")}</option>
+              </Select>
             </FormField>
           </ConfigurableToolCard>
         )}

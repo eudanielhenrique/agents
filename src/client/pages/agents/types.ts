@@ -38,6 +38,15 @@ export interface KanbanWhazingBoardState {
   columns: Array<{ id: number; name: string; color?: string | null }>;
 }
 
+// PIX config for the send_pix_button / request_payment tools, saved in
+// agent.settings.whazingPix. Operator-set — never a model-supplied tool argument (see
+// src/modules/whazing/payments.ts).
+export interface WhazingPixUiState {
+  pixKey: string;
+  pixName: string;
+  pixType: "CPF" | "CNPJ" | "PHONE" | "EMAIL" | "EVP";
+}
+
 // UI-side handoff config (the editor's working copy). `target` encodes the pinned pick as
 // "agent:<id>" | "team:<id>" | "" so one <Select> offers both groups; AgentEditorPage splits it
 // back into targetAgentId/targetTeamId on save. Lives on the handoff_to_human tool (Tools tab).

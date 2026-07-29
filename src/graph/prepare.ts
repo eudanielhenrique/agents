@@ -42,6 +42,7 @@ import {
   type IntegrationSelection,
 } from "@/modules/integrations/toolpacks";
 import { type KanbanConfig, readKanbanConfig } from "@/modules/kanban/settings";
+import { type WhazingPixConfig, readWhazingPixConfig } from "@/modules/whazing/payments";
 import {
   readServiceWindowConfig,
   type ServiceWindowConfig,
@@ -174,6 +175,9 @@ export interface AgentConfig {
   handoffConfig: HandoffConfig;
   // Per-agent kanban guidance (operator funnel note), surfaced in the kanban_move_card description.
   kanbanConfig: KanbanConfig;
+  // Operator-configured PIX key for the Whazing send_pix_button/request_payment tools. null ⇒ those
+  // tools decline rather than let the model invent payment details.
+  pixConfig: WhazingPixConfig | null;
   // Operator-authored guidance for tools whose only config is the note (set_custom_attribute,
   // assign_label, …), keyed by native tool name; merged into the tool descriptions at buildToolset.
   toolGuidance: Partial<Record<NativeToolName, string>>;
@@ -450,6 +454,7 @@ export async function loadAgentConfig(
     serviceWindowConfig: readServiceWindowConfig(effSettings),
     handoffConfig: readHandoffConfig(effSettings),
     kanbanConfig: readKanbanConfig(effSettings),
+    pixConfig: readWhazingPixConfig(effSettings),
     toolGuidance: readToolGuidance(effSettings),
     httpToolContext: {
       ...(conv?.contact?.chatwootContactId != null

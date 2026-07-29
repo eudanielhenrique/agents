@@ -16,6 +16,11 @@ export const NATIVE_TOOL_NAMES = [
   "skip_reply",
   "calculator",
   "get_current_time",
+  "send_button_message",
+  "send_list_message",
+  "send_carousel_message",
+  "send_pix_button",
+  "request_payment",
 ] as const;
 export type NativeToolName = (typeof NATIVE_TOOL_NAMES)[number];
 
@@ -38,6 +43,11 @@ export const NATIVE_TOOL_CATEGORY: Record<NativeToolName, NativeToolCategory> =
     skip_reply: "conversation",
     calculator: "utility",
     get_current_time: "utility",
+    send_button_message: "conversation",
+    send_list_message: "conversation",
+    send_carousel_message: "conversation",
+    send_pix_button: "conversation",
+    request_payment: "conversation",
   };
 
 export const UTILITY_NATIVE_TOOL_NAMES = NATIVE_TOOL_NAMES.filter(
@@ -72,6 +82,12 @@ export const NATIVE_TOOL_RISK: Record<NativeToolName, RiskTier> = {
   skip_reply: "low",
   calculator: "low",
   get_current_time: "low",
+  send_button_message: "low",
+  send_list_message: "low",
+  send_carousel_message: "low",
+  // Money-adjacent: sends the operator-configured PIX key / requests a payment.
+  send_pix_button: "medium",
+  request_payment: "medium",
 };
 
 export const RAG_TOOL_RISK: Record<RagToolName, RiskTier> = {

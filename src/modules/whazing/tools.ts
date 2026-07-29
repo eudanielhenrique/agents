@@ -9,7 +9,8 @@ import {
   roundDownToMinutes,
 } from "@/graph/time";
 import { CalculatorError, evaluateExpression } from "@/graph/tools/calculator";
-import type { WhazingClient } from "./client";
+import type { WhazingClient, WhazingDynamicChoice } from "./client";
+import type { WhazingPixConfig } from "./payments";
 
 // Whazing-native tools that mirror the subset of Chatwoot native tools supported by the
 // WhazingClient. Uses the same tool names so the agent editor's native tool allowlist works
@@ -23,6 +24,9 @@ export interface WhazingToolCtx {
   contactId?: number;
   timezone?: string;
   toolInstructions?: Partial<Record<string, string>>;
+  // Operator-configured PIX key for send_pix_button / request_payment. null ⇒ those tools decline
+  // (they never accept a model-supplied key — see payments.ts).
+  pixConfig?: WhazingPixConfig | null;
 }
 
 function handoffToHumanTool(ctx: WhazingToolCtx) {
@@ -319,6 +323,213 @@ function updateKanbanTaskTool(ctx: WhazingToolCtx) {
   );
 }
 
+const choiceSchema = z.object({
+  displayText: z.string().min(1).describe("Label shown on the choice."),
+  type: z.enum(["reply", "copy", "call", "url"]).describe(
+    "reply = sends `id` back as the customer's message; copy = copies `copyText` to clipboard; call = dials `phoneNumber`; url = opens `url`.",
+  ),
+  id: z.string().optional().describe("Required for type=reply."),
+  copyText: z.string().optional().describe("Required for type=copy."),
+  phoneNumber: z.string().optional().describe("Required for type=call."),
+  url: z.string().optional().describe("Required for type=url."),
+});
+
+function toDynamicChoice(c: z.infer<typeof choiceSchema>): WhazingDynamicChoice {
+  switch (c.type) {
+    case "reply":
+      return { type: "reply", id: c.id ?? c.displayText, displayText: c.displayText };
+    case "copy":
+      return { type: "copy", copyText: c.copyText ?? "", displayText: c.displayText };
+    case "call":
+      return { type: "call", phoneNumber: c.phoneNumber ?? "", displayText: c.displayText };
+    case "url":
+      return { type: "url", url: c.url ?? "", displayText: c.displayText };
+  }
+}
+
+function sendButtonMessageTool(ctx: WhazingToolCtx) {
+  return tool(
+    async ({
+      text,
+      buttons,
+      headerImageUrl,
+    }: {
+      text: string;
+      buttons: { id: string; title: string }[];
+      headerImageUrl?: string;
+    }) => {
+      await ctx.client.sendButtonMessage(ctx.ticketId, text, buttons, { headerImageUrl });
+      return "Button message sent.";
+    },
+    {
+      name: "send_button_message",
+      description:
+        "Send an interactive WhatsApp message with up to 3 quick-reply buttons the customer can tap instead of typing (e.g. confirm/cancel, yes/no, pick a time slot).",
+      schema: z.object({
+        text: z.string().min(1).describe("Message body shown above the buttons."),
+        buttons: z
+          .array(
+            z.object({
+              id: z.string().min(1).describe("Echoed back as the customer's reply when tapped."),
+              title: z.string().min(1).max(20).describe("Button label (short, ~20 chars max)."),
+            }),
+          )
+          .min(1)
+          .max(3)
+          .describe("1 to 3 buttons."),
+        headerImageUrl: z.string().url().optional().describe("Optional image shown above the text."),
+      }),
+    },
+  );
+}
+
+function sendListMessageTool(ctx: WhazingToolCtx) {
+  return tool(
+    async ({
+      headerText,
+      bodyText,
+      buttonText,
+      sections,
+    }: {
+      headerText?: string;
+      bodyText: string;
+      buttonText: string;
+      sections: { title: string; rows: { id: string; title: string; description?: string }[] }[];
+    }) => {
+      await ctx.client.sendListMessage(ctx.ticketId, { headerText, bodyText, buttonText, sections });
+      return "List message sent.";
+    },
+    {
+      name: "send_list_message",
+      description:
+        "Send a WhatsApp list message: a button that opens a scrollable menu of grouped options. Use for more than 3 choices, or when each option needs a short description (product catalog, service menu, time slots).",
+      schema: z.object({
+        headerText: z.string().optional().describe("Optional small title above the body."),
+        bodyText: z.string().min(1).describe("Main message text."),
+        buttonText: z.string().min(1).describe("Label of the button that opens the list, e.g. 'Ver opções'."),
+        sections: z
+          .array(
+            z.object({
+              title: z.string().min(1).describe("Section heading inside the list."),
+              rows: z
+                .array(
+                  z.object({
+                    id: z.string().min(1).describe("Echoed back as the customer's reply when tapped."),
+                    title: z.string().min(1),
+                    description: z.string().optional(),
+                  }),
+                )
+                .min(1),
+            }),
+          )
+          .min(1),
+      }),
+    },
+  );
+}
+
+function sendCarouselMessageTool(ctx: WhazingToolCtx) {
+  return tool(
+    async ({
+      text,
+      items,
+    }: {
+      text: string;
+      items: { text: string; imageUrl: string; choices: z.infer<typeof choiceSchema>[] }[];
+    }) => {
+      await ctx.client.sendCarouselMessage(
+        ctx.ticketId,
+        text,
+        items.map((it) => ({
+          text: it.text,
+          image: it.imageUrl,
+          choices: it.choices.map(toDynamicChoice),
+        })),
+      );
+      return "Carousel sent.";
+    },
+    {
+      name: "send_carousel_message",
+      description:
+        "Send a horizontally-scrollable carousel of cards (image + text + up to 3 choices each). Use to showcase multiple products/plans/options side by side.",
+      schema: z.object({
+        text: z.string().min(1).describe("Intro text shown above the carousel."),
+        items: z
+          .array(
+            z.object({
+              text: z.string().min(1).describe("Card text (title/description)."),
+              imageUrl: z.string().url().describe("Public image URL for the card."),
+              choices: z.array(choiceSchema).min(1).max(3),
+            }),
+          )
+          .min(1)
+          .max(10),
+      }),
+    },
+  );
+}
+
+function sendPixButtonTool(ctx: WhazingToolCtx) {
+  return tool(
+    async () => {
+      if (!ctx.pixConfig) {
+        return "PIX is not configured for this agent. Use handoff_to_human instead of inventing payment details.";
+      }
+      await ctx.client.sendPixButtonMessage(ctx.ticketId, ctx.pixConfig);
+      return "PIX key button sent.";
+    },
+    {
+      name: "send_pix_button",
+      description:
+        "Send a 'copy PIX key' button with the business's configured PIX key, so the customer can pay by tapping to copy the key into their bank app. Takes no arguments — the key is fixed by the operator, never invented.",
+      schema: z.object({}),
+    },
+  );
+}
+
+function requestPaymentTool(ctx: WhazingToolCtx) {
+  return tool(
+    async ({
+      amount,
+      text,
+      title,
+      footer,
+      itemName,
+    }: {
+      amount: number;
+      text?: string;
+      title?: string;
+      footer?: string;
+      itemName?: string;
+    }) => {
+      if (!ctx.pixConfig) {
+        return "PIX is not configured for this agent. Use handoff_to_human instead of inventing payment details.";
+      }
+      await ctx.client.sendPaymentRequestMessage(ctx.ticketId, {
+        amount,
+        text,
+        title,
+        footer,
+        itemName,
+        ...ctx.pixConfig,
+      });
+      return `Payment request for ${amount} sent.`;
+    },
+    {
+      name: "request_payment",
+      description:
+        "Send a payment-request card for a specific amount, payable via the business's configured PIX key. Only the amount and surrounding copy are yours to fill in — the PIX key itself is fixed by the operator.",
+      schema: z.object({
+        amount: z.number().positive().describe("Amount to charge, in BRL (e.g. 199.90)."),
+        text: z.string().optional().describe("Short message shown with the request, e.g. what it's for."),
+        title: z.string().optional().describe("Card title, e.g. 'Detalhes do pedido'."),
+        footer: z.string().optional(),
+        itemName: z.string().optional().describe("Name of the item/service being charged for."),
+      }),
+    },
+  );
+}
+
 // Supported Whazing native tool names (subset of the global NATIVE_TOOL_NAMES catalog).
 export const WHAZING_NATIVE_TOOL_NAMES = [
   "handoff_to_human",
@@ -329,6 +540,11 @@ export const WHAZING_NATIVE_TOOL_NAMES = [
   "get_current_time",
   "kanban_move_card",
   "update_kanban_task",
+  "send_button_message",
+  "send_list_message",
+  "send_carousel_message",
+  "send_pix_button",
+  "request_payment",
 ] as const;
 
 export type WhazingNativeToolName = (typeof WHAZING_NATIVE_TOOL_NAMES)[number];
@@ -346,6 +562,11 @@ export function buildWhazingNativeTools(
     getCurrentTimeTool(ctx),
     kanbanMoveCardTool(ctx),
     updateKanbanTaskTool(ctx),
+    sendButtonMessageTool(ctx),
+    sendListMessageTool(ctx),
+    sendCarouselMessageTool(ctx),
+    sendPixButtonTool(ctx),
+    requestPaymentTool(ctx),
   ];
   if (!allowed) return all;
   const allow = new Set(allowed);
