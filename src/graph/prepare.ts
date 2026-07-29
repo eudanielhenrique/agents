@@ -691,7 +691,7 @@ export async function buildToolset(
     !cfg.nativeToolsAllow ||
     cfg.nativeToolsAllow.some((n) => vocabTools.includes(n));
   let vocab: ChatwootVocab | undefined;
-  if (needsVocab && ctx.conversationId > 0) {
+  if (needsVocab && ctx.conversationId > 0 && "listLabels" in ctx.client) {
     try {
       vocab = await loadChatwootVocab(
         ctx.client,
@@ -711,7 +711,11 @@ export async function buildToolset(
   const grantsKanban =
     !cfg.nativeToolsAllow || cfg.nativeToolsAllow.includes("kanban_move_card");
   let kanban: KanbanContext | undefined;
-  if (grantsKanban && ctx.conversationId > 0) {
+  if (
+    grantsKanban &&
+    ctx.conversationId > 0 &&
+    "kanbanTaskForConversation" in ctx.client
+  ) {
     try {
       kanban =
         (await loadKanbanContext(
