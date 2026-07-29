@@ -1,12 +1,21 @@
+import { randomUUID } from "node:crypto";
 import { assertSafeOutboundUrl } from "@/lib/ssrf";
 import type { InboxReplyClient } from "@/lib/transport/inbox-client";
 
-// Whazing API client. Implements InboxReplyClient for the shared agent runtime
-// (deliverReply, runLoadedTurn) and provides additional methods for the webhook
-// processor, response gate, handoff tools, and media ingestion.
+// Whazing API client. Implements InboxReplyClient for the shared agent runtime.
 //
-// Auth: Bearer token per instance (WhazingInstance.apiKey, decrypted at load time).
+// All write operations use POST to the base URL ({{base_url}}) or specific sub-paths.
+// Auth: Bearer JWT per instance (WhazingInstance.apiKey, decrypted at load time).
 // SSRF: baseUrl is validated once at construction (assertSafeOutboundUrl).
+//
+// Endpoint map (from official Postman collection):
+//   POST {base}            — send text/media message (body/ticketId/number/externalKey)
+//   GET  {base}/ticket/:id — list messages for ticket
+//   POST {base}/updateticketinfo — update ticket status/user/queue
+//   POST {base}/updatequeue      — assign to queue
+//   POST {base}/updatetag        — set contact tags (array of tag IDs)
+//   POST {base}/showticket       — get ticket by number
+//   POST {base}/updatecontact    — update contact fields
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -33,8 +42,8 @@ export class WhazingClient implements InboxReplyClient {
     private readonly config: WhazingClientConfig,
     private readonly fetchImpl: typeof fetch = fetch,
   ) {
-    // baseUrl already contains the full API root (e.g. https://host/v1/api/external/UUID).
-    // Do NOT append /api — the caller supplies the complete base.
+    // baseUrl is the full External API root (e.g. https://host/v1/api/external/UUID).
+    // Sending a message is a POST to this root URL directly (no sub-path).
     this.apiBase = config.baseUrl.replace(/\/+$/, "");
   }
 
@@ -43,7 +52,8 @@ export class WhazingClient implements InboxReplyClient {
     path: string,
     body?: unknown,
   ): Promise<unknown> {
-    const res = await this.fetchImpl(`${this.apiBase}${path}`, {
+    const url = `${this.apiBase}${path}`;
+    const res = await this.fetchImpl(url, {
       method,
       headers: {
         Authorization: `Bearer ${this.config.apiKey}`,
@@ -54,30 +64,28 @@ export class WhazingClient implements InboxReplyClient {
       redirect: "error",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    if (!res.ok) throw new WhazingApiError(res.status, `${method} ${this.apiBase}${path}`);
+    if (!res.ok) throw new WhazingApiError(res.status, `${method} ${url}`);
     const text = await res.text();
     return text ? JSON.parse(text) : null;
   }
 
   // ── InboxReplyClient (shared runtime interface) ──
 
+  // Send text message to an existing ticket.
+  // Whazing uses "body" (not "text") and requires an externalKey for idempotency.
   sendMessage(ticketId: number, text: string): Promise<unknown> {
-    return this.request("POST", `/messages/sendText`, {
-      ticketId,
-      text,
-    });
-  }
-
-  // TODO: Whazing has no native private-note concept — send as internal note or agent message.
-  // Confirm the exact endpoint once the spike (issue #14) validates the API shape.
-  sendPrivateNote(ticketId: number, text: string): Promise<unknown> {
-    return this.request("POST", `/tickets/${ticketId}/notes`, {
+    return this.request("POST", "", {
       body: text,
-      private: true,
+      ticketId,
+      externalKey: randomUUID(),
     });
   }
 
-  // TODO: Confirm the Whazing audio send endpoint in the spike (#14).
+  // Whazing has no native private-note concept — send as a regular message.
+  sendPrivateNote(ticketId: number, text: string): Promise<unknown> {
+    return this.sendMessage(ticketId, text);
+  }
+
   async sendAudioMessage(
     ticketId: number,
     audio: ArrayBuffer,
@@ -86,22 +94,19 @@ export class WhazingClient implements InboxReplyClient {
     opts?: { transcribedText?: string },
   ): Promise<unknown> {
     const form = new FormData();
-    form.append("file", new Blob([audio], { type: mime }), fileName);
+    form.append("media", new Blob([audio], { type: mime }), fileName);
+    form.append("body", opts?.transcribedText ?? "");
     form.append("ticketId", String(ticketId));
-    if (opts?.transcribedText) {
-      form.append("transcribedText", opts.transcribedText);
-    }
-    const res = await this.fetchImpl(`${this.apiBase}/messages/sendAudio`, {
+    form.append("externalKey", randomUUID());
+    const url = this.apiBase;
+    const res = await this.fetchImpl(url, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.config.apiKey}`,
-      },
+      headers: { Authorization: `Bearer ${this.config.apiKey}` },
       body: form,
       redirect: "error",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    if (!res.ok)
-      throw new WhazingApiError(res.status, "POST /messages/sendAudio");
+    if (!res.ok) throw new WhazingApiError(res.status, `POST ${url} (audio)`);
     return null;
   }
 
@@ -110,28 +115,35 @@ export class WhazingClient implements InboxReplyClient {
     return Promise.resolve(null);
   }
 
-  // ── Ticket operations (used by response gate, handoff, and native tools) ──
+  // ── Ticket operations ──
 
+  // List messages for a ticket (GET /ticket/:id).
   getTicket(ticketId: number): Promise<unknown> {
-    return this.request("GET", `/tickets/${ticketId}`);
+    return this.request("GET", `/ticket/${ticketId}`);
   }
 
-  // Assign to a human user (handoff).
+  // Assign to a human user via /updateticketinfo.
   assignTicketToUser(ticketId: number, userId: number): Promise<unknown> {
-    return this.request("PUT", `/tickets/${ticketId}`, { userId });
+    return this.request("POST", "/updateticketinfo", { ticketId, userId });
   }
 
-  // Assign to a queue.
+  // Assign to a queue via /updatequeue.
   assignTicketToQueue(ticketId: number, queueId: number): Promise<unknown> {
-    return this.request("PUT", `/tickets/${ticketId}`, { queueId });
+    return this.request("POST", "/updatequeue", { ticketId, queueId });
   }
 
+  // Close ticket via /updateticketinfo with status "closed".
   closeTicket(ticketId: number): Promise<unknown> {
-    return this.request("PUT", `/tickets/${ticketId}`, { status: "closed" });
+    return this.request("POST", "/updateticketinfo", {
+      ticketId,
+      status: "closed",
+    });
   }
 
+  // Set tags on a contact. Whazing tags are numeric IDs; we pass string tags as-is
+  // and Whazing resolves them. Use ticketId instead of contactId when available.
   setContactTags(contactId: number, tags: string[]): Promise<unknown> {
-    return this.request("PUT", `/contacts/${contactId}`, { tags });
+    return this.request("POST", "/updatetag", { contactId, tags });
   }
 }
 
