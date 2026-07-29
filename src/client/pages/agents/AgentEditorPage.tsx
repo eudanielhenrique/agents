@@ -114,12 +114,10 @@ type TabKey =
 // stale /model and /experiments links) are normalized to /general by the effect below.
 const TAB_KEYS: TabKey[] = [
   "general",
-  "channels",
   "tools",
   "knowledge",
   "behavior",
   "guardrails",
-  "channelRedirect",
   "playground",
 ];
 
@@ -2024,11 +2022,6 @@ export function AgentEditorPage() {
       dirty: dirty.general,
     },
     {
-      key: "channels",
-      label: t("editor.tab.channels", "Channels"),
-      icon: RadioTower,
-    },
-    {
       key: "tools",
       label: t("editor.tab.tools", "Tools"),
       icon: Wrench,
@@ -2051,12 +2044,6 @@ export function AgentEditorPage() {
       label: t("editor.tab.guardrails", "Guardrails"),
       icon: ShieldCheck,
       dirty: dirty.guardrails,
-    },
-    {
-      key: "channelRedirect",
-      label: t("editor.tab.channelRedirect", "Redirect"),
-      icon: Share2,
-      dirty: dirty.channelRedirect,
     },
     {
       key: "playground",

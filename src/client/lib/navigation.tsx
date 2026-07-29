@@ -7,7 +7,6 @@ import {
   LifeBuoy,
   MessagesSquare,
   MessageSquare,
-  RadioTower,
   ScrollText,
   Settings,
   Shield,
@@ -76,13 +75,6 @@ export const NAV_ITEMS: NavItem[] = [
     icon: LibraryBig,
     requireAdmin: true,
     badge: "approvals",
-  },
-  {
-    to: "/channels",
-    labelKey: "nav.channels",
-    defaultLabel: "Channels",
-    icon: RadioTower,
-    requireAdmin: true,
   },
   {
     to: "/whazing",

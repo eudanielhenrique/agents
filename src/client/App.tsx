@@ -145,11 +145,7 @@ export function App() {
                               </Route>
                               <Route
                                 path="/channels"
-                                element={
-                                  <ProtectedRoute requireAdmin>
-                                    <ChannelsPage />
-                                  </ProtectedRoute>
-                                }
+                                element={<Navigate to="/whazing" replace />}
                               />
                               <Route
                                 path="/whazing"
