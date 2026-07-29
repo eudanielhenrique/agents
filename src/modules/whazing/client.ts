@@ -33,8 +33,9 @@ export class WhazingClient implements InboxReplyClient {
     private readonly config: WhazingClientConfig,
     private readonly fetchImpl: typeof fetch = fetch,
   ) {
-    const root = config.baseUrl.replace(/\/+$/, "");
-    this.apiBase = `${root}/api`;
+    // baseUrl already contains the full API root (e.g. https://host/v1/api/external/UUID).
+    // Do NOT append /api — the caller supplies the complete base.
+    this.apiBase = config.baseUrl.replace(/\/+$/, "");
   }
 
   private async request(
@@ -53,7 +54,7 @@ export class WhazingClient implements InboxReplyClient {
       redirect: "error",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    if (!res.ok) throw new WhazingApiError(res.status, `${method} ${path}`);
+    if (!res.ok) throw new WhazingApiError(res.status, `${method} ${this.apiBase}${path}`);
     const text = await res.text();
     return text ? JSON.parse(text) : null;
   }
