@@ -148,6 +148,7 @@ model Tenant {
   whazingInstances              WhazingInstance[]
   whazingWebhookDeliveries      WhazingWebhookDelivery[]
   whazingInboxes                WhazingInbox[]
+  whazingConversations          WhazingConversation[]
 
   @@map("tenants")
 }
