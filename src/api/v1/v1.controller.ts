@@ -18,6 +18,9 @@ import {
   getConversationDetail,
   getConversationMedia,
   getConversationMessages,
+  getWhazingConversationDetail,
+  getWhazingConversationMedia,
+  getWhazingConversationMessages,
   handoffConversation,
   listConversations,
   replyToConversation,
@@ -37,6 +40,16 @@ import { getTenant, listTenants, type TenantUpdate } from "./tenants.service";
 function ctxOrThrow(ctx: TenantContext | null): TenantContext {
   if (!ctx) throw new ForbiddenError();
   return ctx;
+}
+
+// Parse a namespaced conversation id. IDs from the API are "c_{bigint}" (Chatwoot) or
+// "w_{bigint}" (Whazing). Legacy bare BigInt strings are treated as Chatwoot for backcompat.
+function parseConvId(
+  raw: string,
+): { transport: "chatwoot" | "whazing"; id: bigint } {
+  if (raw.startsWith("w_")) return { transport: "whazing", id: BigInt(raw.slice(2)) };
+  if (raw.startsWith("c_")) return { transport: "chatwoot", id: BigInt(raw.slice(2)) };
+  return { transport: "chatwoot", id: BigInt(raw) };
 }
 
 // Builds the one-time accept link the operator copies/sends (there is no mailer).
@@ -307,19 +320,21 @@ export const v1Controller = new Elysia({ prefix: "/v1" })
   )
   .get(
     "/conversations/:id",
-    async ({ tenantContext, params }) => ({
-      instance: instanceIdentity,
-      conversation: await getConversationDetail(
-        ctxOrThrow(tenantContext),
-        BigInt(params.id),
-      ),
-    }),
+    async ({ tenantContext, params }) => {
+      const ctx = ctxOrThrow(tenantContext);
+      const { transport, id } = parseConvId(params.id);
+      const conversation =
+        transport === "whazing"
+          ? await getWhazingConversationDetail(ctx, id)
+          : await getConversationDetail(ctx, id);
+      return { instance: instanceIdentity, conversation };
+    },
     {
       requireAuth: true,
       params: t.Object({
         id: t.String({
           description:
-            "Conversation primary key (BigInt serialized as a decimal string), not the Chatwoot display id.",
+            "Namespaced conversation id: 'c_{bigint}' for Chatwoot, 'w_{bigint}' for Whazing.",
         }),
       }),
       detail: {
@@ -336,6 +351,14 @@ export const v1Controller = new Elysia({ prefix: "/v1" })
   .get(
     "/conversations/:id/messages",
     async ({ tenantContext, params, query }) => {
+      const ctx = ctxOrThrow(tenantContext);
+      const { transport, id } = parseConvId(params.id);
+      if (transport === "whazing") {
+        return {
+          instance: instanceIdentity,
+          ...(await getWhazingConversationMessages(ctx, id)),
+        };
+      }
       const before =
         query.before != null && query.before !== ""
           ? Number.parseInt(query.before, 10)
@@ -343,8 +366,8 @@ export const v1Controller = new Elysia({ prefix: "/v1" })
       return {
         instance: instanceIdentity,
         ...(await getConversationMessages(
-          ctxOrThrow(tenantContext),
-          BigInt(params.id),
+          ctx,
+          id,
           {},
           undefined,
           Number.isFinite(before) ? before : undefined,
@@ -378,16 +401,17 @@ export const v1Controller = new Elysia({ prefix: "/v1" })
     },
   )
   // Streams an attachment (voice note / image / file) through our origin so it plays/renders under a
-  // strict CSP and carries the SUPER_ADMIN tenant selector. The bytes live on the tenant's Chatwoot;
-  // the url is origin-locked to that instance (getConversationMedia) so this is never an open proxy.
+  // strict CSP and carries the SUPER_ADMIN tenant selector. The bytes live on the tenant's Chatwoot
+  // (or Whazing instance); the url is origin-locked to that instance so this is never an open proxy.
   .get(
     "/conversations/:id/media",
     async ({ tenantContext, params, query, set }) => {
-      const blob = await getConversationMedia(
-        ctxOrThrow(tenantContext),
-        BigInt(params.id),
-        query.url,
-      );
+      const ctx = ctxOrThrow(tenantContext);
+      const { transport, id } = parseConvId(params.id);
+      const blob =
+        transport === "whazing"
+          ? await getWhazingConversationMedia(ctx, id, query.url)
+          : await getConversationMedia(ctx, id, query.url);
       if (!blob) {
         set.status = 404;
         return { error: "Not Found" };
@@ -426,12 +450,12 @@ export const v1Controller = new Elysia({ prefix: "/v1" })
   .post(
     "/conversations/:id/reply",
     async ({ tenantContext, params, body }) => {
-      await replyToConversation(
-        ctxOrThrow(tenantContext),
-        BigInt(params.id),
-        body.content,
-        body.private ?? false,
-      );
+      const ctx = ctxOrThrow(tenantContext);
+      const { transport, id } = parseConvId(params.id);
+      if (transport === "whazing") {
+        throw new AppError("reply not supported for Whazing conversations via the console", 400);
+      }
+      await replyToConversation(ctx, id, body.content, body.private ?? false);
       return { instance: instanceIdentity, success: true };
     },
     {
@@ -468,11 +492,12 @@ export const v1Controller = new Elysia({ prefix: "/v1" })
   .post(
     "/conversations/:id/handoff",
     async ({ tenantContext, params, body }) => {
-      await handoffConversation(
-        ctxOrThrow(tenantContext),
-        BigInt(params.id),
-        body.assigneeId ?? null,
-      );
+      const ctx = ctxOrThrow(tenantContext);
+      const { transport, id } = parseConvId(params.id);
+      if (transport === "whazing") {
+        throw new AppError("handoff not supported for Whazing conversations via the console", 400);
+      }
+      await handoffConversation(ctx, id, body.assigneeId ?? null);
       return { instance: instanceIdentity, success: true };
     },
     {
@@ -504,10 +529,12 @@ export const v1Controller = new Elysia({ prefix: "/v1" })
   .post(
     "/conversations/:id/return",
     async ({ tenantContext, params }) => {
-      await returnConversationToAgent(
-        ctxOrThrow(tenantContext),
-        BigInt(params.id),
-      );
+      const ctx = ctxOrThrow(tenantContext);
+      const { transport, id } = parseConvId(params.id);
+      if (transport === "whazing") {
+        throw new AppError("return-to-agent not supported for Whazing conversations via the console", 400);
+      }
+      await returnConversationToAgent(ctx, id);
       return { instance: instanceIdentity, success: true };
     },
     {
@@ -531,10 +558,12 @@ export const v1Controller = new Elysia({ prefix: "/v1" })
   .post(
     "/conversations/:id/reengage",
     async ({ tenantContext, params }) => {
-      const { outcome } = await reengageConversation(
-        ctxOrThrow(tenantContext),
-        BigInt(params.id),
-      );
+      const ctx = ctxOrThrow(tenantContext);
+      const { transport, id } = parseConvId(params.id);
+      if (transport === "whazing") {
+        throw new AppError("reengage not supported for Whazing conversations via the console", 400);
+      }
+      const { outcome } = await reengageConversation(ctx, id);
       return { instance: instanceIdentity, outcome };
     },
     {
@@ -558,11 +587,12 @@ export const v1Controller = new Elysia({ prefix: "/v1" })
   .post(
     "/conversations/:id/status",
     async ({ tenantContext, params, body }) => {
-      await setConversationStatus(
-        ctxOrThrow(tenantContext),
-        BigInt(params.id),
-        body.status,
-      );
+      const ctx = ctxOrThrow(tenantContext);
+      const { transport, id } = parseConvId(params.id);
+      if (transport === "whazing") {
+        throw new AppError("status change not supported for Whazing conversations via the console", 400);
+      }
+      await setConversationStatus(ctx, id, body.status);
       return { instance: instanceIdentity, success: true };
     },
     {

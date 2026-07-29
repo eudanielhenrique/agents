@@ -360,6 +360,7 @@ model WhazingInstance {
   tenant            Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   inboxes           WhazingInbox[]
   webhookDeliveries WhazingWebhookDelivery[]
+  conversations     WhazingConversation[]
 
   @@unique([tenantId, baseUrl])
   @@index([tenantId])
@@ -404,13 +405,47 @@ model WhazingInbox {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
-  tenant   Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  instance WhazingInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
-  agent    Agent?          @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  tenant        Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  instance      WhazingInstance        @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  agent         Agent?                 @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  conversations WhazingConversation[]
 
   @@index([tenantId])
   @@index([instanceId])
   @@map("whazing_inboxes")
+}
+
+// Mirror of a Whazing ticket's metadata, upserted on each agent turn. Holds no message bodies (PII);
+// messages are fetched on demand from the Whazing API. Same purpose as the Chatwoot Conversation model.
+model WhazingConversation {
+  id             BigInt    @id @default(autoincrement())
+  tenantId       BigInt    @map("tenant_id")
+  instanceId     BigInt    @map("instance_id")
+  inboxId        BigInt?   @map("inbox_id")
+  ticketId       Int       @map("ticket_id")
+  threadId       String    @map("thread_id")
+  status         String    @default("open")
+  // Whazing user id of the human currently assigned; null = bot handling.
+  assignedUserId Int?      @map("assigned_user_id")
+  // Whazing contact id + name (denormalized — no Contact FK for Whazing yet).
+  contactId      Int?      @map("contact_id")
+  contactName    String?   @map("contact_name")
+  agentId        BigInt?   @map("agent_id")
+  lastEventAt    DateTime? @map("last_event_at")
+  lastInboundAt  DateTime? @map("last_inbound_at")
+  lastError      String?   @map("last_error")
+  lastErrorAt    DateTime? @map("last_error_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  tenant   Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  instance WhazingInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  inbox    WhazingInbox?   @relation(fields: [inboxId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, instanceId, ticketId])
+  @@index([tenantId])
+  @@index([instanceId])
+  @@map("whazing_conversations")
 }
 
 model Inbox {

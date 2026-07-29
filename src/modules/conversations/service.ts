@@ -24,6 +24,7 @@ import {
   readFollowUpConfig,
   stepDelayMinutes,
 } from "@/modules/followups/settings";
+import { loadWhazingClient } from "@/modules/whazing/instance";
 
 // Read projection of the Conversation mirror for the operational UI + (future) fleet. The mirror
 // holds METADATA ONLY — no message bodies — so the heavy PII (conversation content) is never even
@@ -55,10 +56,17 @@ export interface ListConversationsFilter {
   q?: string;
 }
 
+// Transport discriminator: "chatwoot" rows come from the Conversation table, "whazing" from WhazingConversation.
+// IDs are namespaced: "c_<bigint>" for Chatwoot, "w_<bigint>" for Whazing.
+export type ConversationTransport = "chatwoot" | "whazing";
+
 export interface ConversationListItem {
   id: string;
+  transport: ConversationTransport;
   threadId: string;
   chatwootConversationId: number;
+  // Whazing-only; null for Chatwoot rows.
+  whazingTicketId: number | null;
   status: string;
   assigneeId: number | null;
   assigneeType: string | null;
@@ -94,13 +102,16 @@ function normalizeStatus(status: string | undefined): string | undefined {
     : undefined;
 }
 
-function parseCursor(cursor: string | undefined): bigint | null {
+// Cursor format: "t:{unixMs}" — the lastEventAt of the last item on the previous page.
+// Items older than the cursor timestamp appear on the next page.
+// Legacy BigInt cursors (from before the dual-transport merge) parse to null (start from page 1).
+function parseTsCursor(cursor: string | undefined): Date | null {
   if (!cursor) return null;
-  try {
-    return BigInt(cursor);
-  } catch {
-    return null;
+  if (cursor.startsWith("t:")) {
+    const ms = Number(cursor.slice(2));
+    if (!Number.isNaN(ms)) return new Date(ms);
   }
+  return null;
 }
 
 // Combine the status filter with an optional free-text search. Search matches the contact display
@@ -110,9 +121,11 @@ function parseCursor(cursor: string | undefined): bigint | null {
 function buildConversationsWhere(
   status: string | undefined,
   q: string | undefined,
+  cursorTs: Date | null,
 ): Prisma.ConversationWhereInput {
   const where: Prisma.ConversationWhereInput = {};
   if (status) where.status = status;
+  if (cursorTs) where.lastEventAt = { lt: cursorTs };
   const term = q?.trim();
   if (term) {
     const or: Prisma.ConversationWhereInput[] = [
@@ -127,6 +140,32 @@ function buildConversationsWhere(
   return where;
 }
 
+// Whazing conversations where clause — parallel to buildConversationsWhere but for WhazingConversation.
+function buildWhazingConversationsWhere(
+  status: string | undefined,
+  q: string | undefined,
+  cursorTs: Date | null,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): any {
+  // @ts-ignore — WhazingConversation types regenerate at build time
+  const where: Record<string, unknown> = {};
+  if (status) where.status = status;
+  if (cursorTs) where.lastEventAt = { lt: cursorTs };
+  const term = q?.trim();
+  if (term) {
+    // @ts-ignore
+    const or: unknown[] = [
+      { contactName: { contains: term, mode: "insensitive" } },
+    ];
+    if (/^\d+$/.test(term)) {
+      const n = Number(term);
+      if (Number.isSafeInteger(n)) or.push({ ticketId: n });
+    }
+    where.OR = or;
+  }
+  return where;
+}
+
 export async function listConversations(
   ctx: TenantContext,
   filter: ListConversationsFilter,
@@ -134,44 +173,139 @@ export async function listConversations(
 ): Promise<ConversationsPage> {
   const take = clampLimit(filter.limit);
   const status = normalizeStatus(filter.status);
-  const cursorId = parseCursor(filter.cursor);
-  const where = buildConversationsWhere(status, filter.q);
-  const rows = await runScopedOn(base, ctx, (db) =>
-    db.conversation.findMany({
-      where,
-      // lastEventAt is the canonical recency signal (nulls sort last); id breaks ties.
-      orderBy: [
-        { lastEventAt: { sort: "desc", nulls: "last" } },
-        { id: "desc" },
-      ],
-      take,
-      // Keyset: seek past the cursor row in the ordering above (id is unique → a stable anchor).
-      ...(cursorId != null ? { cursor: { id: cursorId }, skip: 1 } : {}),
-      select: {
-        id: true,
-        threadId: true,
-        chatwootConversationId: true,
-        status: true,
-        assigneeId: true,
-        assigneeType: true,
-        assigneeName: true,
-        lastEventAt: true,
-        lastError: true,
-        lastErrorAt: true,
-        inbox: { select: { id: true, name: true, agentId: true } },
-        contact: { select: { name: true } },
-      },
-    }),
-  );
-  // Resolve the bound persona names for this page in one batch (Inbox carries agentId, no relation).
-  const agentIds = [
-    ...new Set(
-      rows.map((r) => r.inbox?.agentId).filter((x): x is bigint => x != null),
+  const cursorTs = parseTsCursor(filter.cursor);
+  const chatwootWhere = buildConversationsWhere(status, filter.q, cursorTs);
+  const whazingWhere = buildWhazingConversationsWhere(status, filter.q, cursorTs);
+
+  // Fetch take+1 from each source so we can detect "has more" without a count query.
+  const [chatwootRows, whazingRows] = await Promise.all([
+    runScopedOn(base, ctx, (db) =>
+      db.conversation.findMany({
+        where: chatwootWhere,
+        orderBy: [
+          { lastEventAt: { sort: "desc", nulls: "last" } },
+          { id: "desc" },
+        ],
+        take: take + 1,
+        select: {
+          id: true,
+          threadId: true,
+          chatwootConversationId: true,
+          status: true,
+          assigneeId: true,
+          assigneeType: true,
+          assigneeName: true,
+          lastEventAt: true,
+          lastError: true,
+          lastErrorAt: true,
+          inbox: { select: { id: true, name: true, agentId: true } },
+          contact: { select: { name: true } },
+        },
+      }),
     ),
+    runScopedOn(base, ctx, (db) =>
+      // @ts-ignore — WhazingConversation added to schema; types regenerate at build time
+      db.whazingConversation.findMany({
+        where: whazingWhere,
+        orderBy: [
+          { lastEventAt: { sort: "desc", nulls: "last" } },
+          { id: "desc" },
+        ],
+        take: take + 1,
+        select: {
+          id: true,
+          ticketId: true,
+          threadId: true,
+          status: true,
+          assignedUserId: true,
+          contactName: true,
+          agentId: true,
+          lastEventAt: true,
+          lastError: true,
+          lastErrorAt: true,
+          inbox: { select: { id: true, name: true } },
+        },
+      }),
+    ).catch(() => [] as unknown[]),
+  ]);
+
+  // Normalize Whazing rows to a shared shape with a transport discriminator.
+  type RawRow = {
+    _type: "chatwoot" | "whazing";
+    id: bigint;
+    threadId: string;
+    chatwootConversationId: number;
+    whazingTicketId: number | null;
+    status: string;
+    assigneeId: number | null;
+    assigneeType: string | null;
+    assigneeName: string | null;
+    lastEventAt: Date | null;
+    lastError: string | null;
+    lastErrorAt: Date | null;
+    inboxId: bigint | null;
+    inboxName: string | null;
+    agentId: bigint | null;
+    contactName: string | null;
+  };
+
+  const cwNorm: RawRow[] = (chatwootRows as typeof chatwootRows).map((r) => ({
+    _type: "chatwoot",
+    id: r.id,
+    threadId: r.threadId,
+    chatwootConversationId: r.chatwootConversationId,
+    whazingTicketId: null,
+    status: r.status,
+    assigneeId: r.assigneeId,
+    assigneeType: r.assigneeType,
+    assigneeName: r.assigneeName,
+    lastEventAt: r.lastEventAt,
+    lastError: r.lastError,
+    lastErrorAt: r.lastErrorAt,
+    inboxId: r.inbox?.id ?? null,
+    inboxName: r.inbox?.name ?? null,
+    agentId: r.inbox?.agentId ?? null,
+    contactName: r.contact?.name ?? null,
+  }));
+
+  const wzNorm: RawRow[] = (whazingRows as Array<Record<string, unknown>>).map((r) => ({
+    _type: "whazing",
+    id: r.id as bigint,
+    threadId: r.threadId as string,
+    chatwootConversationId: 0,
+    whazingTicketId: r.ticketId as number,
+    status: r.status as string,
+    assigneeId: (r.assignedUserId as number | null) ?? null,
+    assigneeType: null,
+    assigneeName: null,
+    lastEventAt: (r.lastEventAt as Date | null) ?? null,
+    lastError: (r.lastError as string | null) ?? null,
+    lastErrorAt: (r.lastErrorAt as Date | null) ?? null,
+    inboxId: (r.inbox as { id: bigint } | null)?.id ?? null,
+    inboxName: (r.inbox as { name: string } | null)?.name ?? null,
+    agentId: (r.agentId as bigint | null) ?? null,
+    contactName: (r.contactName as string | null) ?? null,
+  }));
+
+  // Merge and sort: lastEventAt DESC nulls-last, then id DESC (arbitrary tie-break across transports).
+  const merged = [...cwNorm, ...wzNorm].sort((a, b) => {
+    const ta = a.lastEventAt?.getTime() ?? -1;
+    const tb = b.lastEventAt?.getTime() ?? -1;
+    if (tb !== ta) return tb - ta;
+    // Tie-break: compare as string to produce a stable, consistent ordering across types
+    const sa = `${a._type}:${String(a.id)}`;
+    const sb = `${b._type}:${String(b.id)}`;
+    return sb < sa ? -1 : sb > sa ? 1 : 0;
+  });
+
+  const hasMore = merged.length > take;
+  const pageRows = merged.slice(0, take);
+
+  // Resolve the bound persona names + out-of-hours for this page in batched reads.
+  const agentIds = [
+    ...new Set(pageRows.map((r) => r.agentId).filter((x): x is bigint => x != null)),
   ];
   const agentNameById = new Map<string, string>();
-  // Each bound agent's availability schedule id, to compute the out-of-hours badge (item 23) for the
-  // page in two batched queries (agents → their distinct schedules), no N+1.
   const agentHoursId = new Map<string, bigint | null>();
   if (agentIds.length > 0) {
     const agents = await runScopedOn(base, ctx, (db) =>
@@ -209,14 +343,15 @@ export async function listConversations(
   const agentOutOfHours = (agentId: bigint | null | undefined): boolean => {
     if (agentId == null) return false;
     const hId = agentHoursId.get(String(agentId));
-    return hId != null
-      ? (outOfHoursByHoursId.get(String(hId)) ?? false)
-      : false;
+    return hId != null ? (outOfHoursByHoursId.get(String(hId)) ?? false) : false;
   };
-  const items = rows.map((r) => ({
-    id: String(r.id),
+
+  const items: ConversationListItem[] = pageRows.map((r) => ({
+    id: r._type === "chatwoot" ? `c_${String(r.id)}` : `w_${String(r.id)}`,
+    transport: r._type,
     threadId: r.threadId,
     chatwootConversationId: r.chatwootConversationId,
+    whazingTicketId: r.whazingTicketId,
     status: r.status,
     assigneeId: r.assigneeId,
     assigneeType: r.assigneeType,
@@ -224,19 +359,22 @@ export async function listConversations(
     lastEventAt: r.lastEventAt ? r.lastEventAt.toISOString() : null,
     lastError: r.lastError,
     lastErrorAt: r.lastErrorAt ? r.lastErrorAt.toISOString() : null,
-    inbox: r.inbox ? { id: String(r.inbox.id), name: r.inbox.name } : null,
-    contact: r.contact ? { name: r.contact.name } : null,
-    agentName:
-      r.inbox?.agentId != null
-        ? (agentNameById.get(String(r.inbox.agentId)) ?? null)
+    inbox:
+      r.inboxId != null && r.inboxName != null
+        ? { id: String(r.inboxId), name: r.inboxName }
         : null,
-    outOfHours: agentOutOfHours(r.inbox?.agentId),
+    contact: r.contactName != null ? { name: r.contactName } : null,
+    agentName: r.agentId != null ? (agentNameById.get(String(r.agentId)) ?? null) : null,
+    outOfHours: agentOutOfHours(r.agentId),
   }));
-  // A full page may have more behind it; the last row's id is the next cursor.
+
+  // Next cursor encodes the lastEventAt of the last item so the next page starts after it.
+  const lastItem = items[items.length - 1];
   const nextCursor =
-    rows.length === take && items.length > 0
-      ? (items[items.length - 1]?.id ?? null)
+    hasMore && lastItem
+      ? `t:${lastItem.lastEventAt ? new Date(lastItem.lastEventAt).getTime() : 0}`
       : null;
+
   return { items, nextCursor };
 }
 
@@ -359,8 +497,15 @@ export interface ConversationDetail {
     offsetHours: number | null; // how long before the start (hours)
     isLast: boolean; // the closest reminder (the one that may ask for confirmation)
   }[];
+  // Transport: "chatwoot" or "whazing". Drives conditional rendering in the detail page.
+  transport: ConversationTransport;
+  // Whazing-only fields (null for Chatwoot conversations).
+  whazingTicketId: number | null;
+  // Origin for the "Open in Whazing" link (null for Chatwoot).
+  whazingBaseUrl: string | null;
   // Origin + account of the conversation's Chatwoot instance, to build an "open in Chatwoot" link
   // (${chatwootBaseUrl}/app/accounts/${accountId}/conversations/${chatwootConversationId}).
+  // Both null for Whazing conversations.
   chatwootBaseUrl: string;
   accountId: number;
   // Recent execution-flow markers for THIS conversation (PII-free), interleaved into the timeline:
@@ -912,6 +1057,9 @@ export async function getConversationDetail(
       : null,
     followUp,
     appointmentReminders,
+    transport: "chatwoot" as ConversationTransport,
+    whazingTicketId: null,
+    whazingBaseUrl: null,
     chatwootBaseUrl: conv.instance.deployment.baseUrl,
     accountId: conv.instance.accountId,
     trail,
@@ -1054,7 +1202,7 @@ export async function handoffConversation(
   });
   // Optimistic realtime feedback (the inbound webhook reconciles canonically).
   broadcastConversationEvent(tenantId, {
-    conversationId: String(id),
+    conversationId: `c_${String(id)}`,
     status: "open",
     assigneeId: assigneeId ?? conv.assigneeId,
     assigneeType: "User",
@@ -1092,7 +1240,7 @@ export async function returnConversationToAgent(
     assigneeType: null,
   });
   broadcastConversationEvent(tenantId, {
-    conversationId: String(id),
+    conversationId: `c_${String(id)}`,
     status: "pending",
     assigneeId: null,
     assigneeType: null,
@@ -1119,10 +1267,306 @@ export async function setConversationStatus(
   });
   await updateMirror(ctx, base, id, { status });
   broadcastConversationEvent(tenantId, {
-    conversationId: String(id),
+    conversationId: `c_${String(id)}`,
     status,
     assigneeId: conv.assigneeId,
     assigneeType: conv.assigneeType,
     lastEventAt: conv.lastEventAt ? conv.lastEventAt.toISOString() : null,
   });
+}
+
+// ── Whazing conversation operations ──
+//
+// WhazingConversation rows are metadata mirrors (no PII beyond contactName). Messages are fetched
+// on demand from the Whazing External API (GET /ticket/:id). Write operations are not supported
+// in the operator console MVP — the detail page is read-only for Whazing conversations.
+
+async function loadWhazingConvRef(
+  ctx: TenantContext,
+  id: bigint,
+  base: PrismaClient,
+): Promise<{
+  id: bigint;
+  ticketId: number;
+  threadId: string;
+  status: string;
+  assignedUserId: number | null;
+  contactName: string | null;
+  agentId: bigint | null;
+  instanceId: bigint;
+  lastEventAt: Date | null;
+  lastError: string | null;
+  lastErrorAt: Date | null;
+  inbox: { id: bigint; name: string } | null;
+  instance: { baseUrl: string };
+}> {
+  const row = await runScopedOn(base, ctx, (db) =>
+    // @ts-ignore — WhazingConversation types regenerate at build time
+    db.whazingConversation.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        ticketId: true,
+        threadId: true,
+        status: true,
+        assignedUserId: true,
+        contactName: true,
+        agentId: true,
+        instanceId: true,
+        lastEventAt: true,
+        lastError: true,
+        lastErrorAt: true,
+        inbox: { select: { id: true, name: true } },
+        instance: { select: { baseUrl: true } },
+      },
+    }),
+  );
+  if (!row) {
+    throw new NotFoundError("conversation not found", "errors.conversationNotFound");
+  }
+  return row as {
+    id: bigint;
+    ticketId: number;
+    threadId: string;
+    status: string;
+    assignedUserId: number | null;
+    contactName: string | null;
+    agentId: bigint | null;
+    instanceId: bigint;
+    lastEventAt: Date | null;
+    lastError: string | null;
+    lastErrorAt: Date | null;
+    inbox: { id: bigint; name: string } | null;
+    instance: { baseUrl: string };
+  };
+}
+
+// Metadata-only detail for a Whazing conversation. Mirrors getConversationDetail in shape
+// but omits Chatwoot-specific fields (followUp, appointmentReminders, voiceReply, etc.).
+export async function getWhazingConversationDetail(
+  ctx: TenantContext,
+  id: bigint,
+  base: PrismaClient = basePrisma,
+): Promise<ConversationDetail> {
+  requireTenant(ctx);
+  const conv = await loadWhazingConvRef(ctx, id, base);
+  const agentId = conv.agentId;
+  const agent =
+    agentId != null
+      ? await runScopedOn(base, ctx, (db) =>
+          db.agent.findUnique({
+            where: { id: agentId },
+            select: { name: true, mode: true, modelConfig: true, businessHoursId: true },
+          }),
+        )
+      : null;
+
+  let outOfHours = false;
+  if (agent?.businessHoursId != null) {
+    const bh = await runScopedOn(base, ctx, (db) =>
+      db.businessHours.findUnique({
+        where: { id: agent.businessHoursId! },
+        select: { windows: true, timezone: true },
+      }),
+    );
+    if (bh) {
+      outOfHours = isOutOfHoursNow(parseWindows(bh.windows), bh.timezone, new Date());
+    }
+  }
+
+  // Trail: same as Chatwoot — ExecutionLog.conversationId is set to the WhazingConversation row id
+  // by the upsert in runtime.ts, so tool calls appear here automatically.
+  const trailRows = await runScopedOn(base, ctx, (db) =>
+    db.executionLog.findMany({
+      where: {
+        conversationId: id,
+        source: "inbox",
+        stage: { in: ["tool", "generate"] },
+      },
+      orderBy: { id: "desc" },
+      take: 60,
+      select: {
+        id: true,
+        stage: true,
+        status: true,
+        durationMs: true,
+        detail: true,
+        errorMessage: true,
+        createdAt: true,
+      },
+    }),
+  );
+  const trail: ConversationTrailEntry[] = [];
+  for (const r of trailRows) {
+    const detail = (r.detail ?? null) as Record<string, unknown> | null;
+    if (r.stage === "tool") {
+      const rawOutput = detail?.output;
+      trail.push({
+        id: String(r.id),
+        kind: "tool",
+        name: typeof detail?.tool === "string" ? detail.tool : null,
+        status: r.status,
+        durationMs: r.durationMs,
+        step: null,
+        args: detail?.args ?? null,
+        output:
+          typeof rawOutput === "string"
+            ? rawOutput
+            : rawOutput != null
+              ? JSON.stringify(rawOutput)
+              : null,
+        errorMessage: r.status === "error" ? r.errorMessage : null,
+        at: r.createdAt.toISOString(),
+      });
+    } else if (r.stage === "generate" && detail && typeof detail.trigger === "string") {
+      trail.push({
+        id: String(r.id),
+        kind: detail.trigger === "appointment_reminder" ? "reminder" : "followup",
+        name: detail.trigger,
+        status: r.status,
+        durationMs: r.durationMs,
+        step: typeof detail.step === "number" ? detail.step : null,
+        args: null,
+        output: null,
+        errorMessage: null,
+        at: r.createdAt.toISOString(),
+      });
+    }
+  }
+  trail.reverse();
+
+  return {
+    id: `w_${String(conv.id)}`,
+    threadId: conv.threadId,
+    chatwootConversationId: 0,
+    status: conv.status,
+    assigneeId: conv.assignedUserId,
+    assigneeType: null,
+    assigneeName: null,
+    lastError: conv.lastError,
+    lastErrorAt: conv.lastErrorAt ? conv.lastErrorAt.toISOString() : null,
+    inbox: conv.inbox ? { id: String(conv.inbox.id), name: conv.inbox.name } : null,
+    contact: conv.contactName != null ? { name: conv.contactName, voiceReply: null } : null,
+    agentId: agentId != null ? String(agentId) : null,
+    agentName: agent?.name ?? null,
+    agentMode: agent ? (agent.mode === "test" ? "test" : "production") : null,
+    agentModel: (() => {
+      const parsed = modelConfigSchema.safeParse(agent?.modelConfig);
+      return parsed.success ? parsed.data.model : null;
+    })(),
+    outOfHours,
+    testActivatedAt: null,
+    followUp: null,
+    appointmentReminders: [],
+    transport: "whazing",
+    whazingTicketId: conv.ticketId,
+    whazingBaseUrl: conv.instance.baseUrl,
+    chatwootBaseUrl: "",
+    accountId: 0,
+    trail,
+  };
+}
+
+// Normalize a raw Whazing ticket message to the shared ConversationMessage shape.
+// The getTicket response shape is tentative; this normalizer is defensive.
+function normalizeWhazingTicketMessages(raw: unknown): ConversationMessage[] {
+  // Expected shapes: { messages: [...] } or a bare array
+  const payload = (raw as { messages?: unknown } | null)?.messages;
+  const arr = Array.isArray(payload)
+    ? payload
+    : Array.isArray(raw)
+      ? (raw as unknown[])
+      : [];
+  return arr.slice(-100).map((m) => {
+    const msg = (m ?? {}) as Record<string, unknown>;
+    const fromMe = msg.fromMe === true || msg.fromMe === "true";
+    // Whazing: fromMe=true → we sent it (outgoing=1), fromMe=false → customer (incoming=0)
+    const messageType = fromMe ? 1 : 0;
+    const timestamp =
+      typeof msg.timestamp === "number"
+        ? msg.timestamp
+        : typeof msg.createdAt === "number"
+          ? msg.createdAt
+          : null;
+    const body =
+      typeof msg.body === "string" && msg.body
+        ? msg.body
+        : typeof msg.text === "string" && msg.text
+          ? msg.text
+          : null;
+    const rawAtts = Array.isArray(msg.attachments) ? msg.attachments : [];
+    const attachments: ConversationAttachment[] = (rawAtts as unknown[])
+      .filter((a): a is Record<string, unknown> => typeof a === "object" && a !== null)
+      .map((a) => ({
+        id: typeof a.id === "number" ? a.id : null,
+        fileType: typeof a.mediaType === "string" ? a.mediaType : (typeof a.type === "string" ? a.type : null),
+        dataUrl: typeof a.mediaUrl === "string" ? a.mediaUrl : (typeof a.url === "string" ? a.url : null),
+        thumbUrl: null,
+        transcribedText: null,
+      }));
+    return {
+      id: typeof msg.id === "number" ? msg.id : null,
+      content: body,
+      messageType,
+      private: false,
+      createdAt: timestamp,
+      senderName: null,
+      senderType: fromMe ? "agent_bot" : "contact",
+      attachments,
+      inReplyTo: null,
+      isReaction: false,
+    };
+  });
+}
+
+// Fetch the live message thread for a Whazing conversation (GET /ticket/:id on the Whazing API).
+// Degrades gracefully: on failure returns an empty thread with messagesUnavailable=true.
+// NOTE: Whazing's getTicket does not support pagination — always returns the full history.
+export async function getWhazingConversationMessages(
+  ctx: TenantContext,
+  id: bigint,
+  base: PrismaClient = basePrisma,
+): Promise<ConversationThread> {
+  const tenantId = requireTenant(ctx);
+  const conv = await loadWhazingConvRef(ctx, id, base);
+  try {
+    const client = await loadWhazingClient(tenantId, conv.instanceId, base);
+    const raw = await client.getTicket(conv.ticketId);
+    return {
+      messages: normalizeWhazingTicketMessages(raw),
+      messagesUnavailable: false,
+      hasMoreOlder: false,
+    };
+  } catch (err) {
+    logger.warn(
+      { err, whazingConversationId: String(id), ticketId: conv.ticketId },
+      "whazing getTicket failed; serving conversation without the thread",
+    );
+    return { messages: [], messagesUnavailable: true, hasMoreOlder: false };
+  }
+}
+
+// Proxies a Whazing media attachment through our origin (SSRF-validated at client construction).
+// The Whazing client already has the Bearer token; we just stream the bytes through.
+export async function getWhazingConversationMedia(
+  ctx: TenantContext,
+  id: bigint,
+  url: string,
+  base: PrismaClient = basePrisma,
+): Promise<ConversationMediaBlob | null> {
+  const tenantId = requireTenant(ctx);
+  const conv = await loadWhazingConvRef(ctx, id, base);
+  // SSRF: the media URL must be on the same origin as the Whazing instance.
+  let sameOrigin = false;
+  try {
+    sameOrigin = new URL(url).origin === new URL(conv.instance.baseUrl).origin;
+  } catch {
+    sameOrigin = false;
+  }
+  if (!sameOrigin) {
+    throw new AppError("media url is not on the conversation's Whazing instance", 400);
+  }
+  const client = await loadWhazingClient(tenantId, conv.instanceId, base);
+  const { bytes, contentType } = await client.downloadMedia(url);
+  return { bytes, contentType };
 }

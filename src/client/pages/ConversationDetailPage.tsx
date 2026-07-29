@@ -1442,10 +1442,16 @@ export function ConversationDetailPage() {
   }
 
   const isHuman = conv?.assigneeType === "User";
-  // Deep link to this conversation in the operator's Chatwoot (build from the instance origin/account).
-  const chatwootUrl = conv
-    ? `${conv.chatwootBaseUrl}/app/accounts/${conv.accountId}/conversations/${conv.chatwootConversationId}`
-    : null;
+  const isWhazing = conv?.transport === "whazing";
+  // Deep link to the conversation in its native inbox (Chatwoot or Whazing).
+  const chatwootUrl =
+    conv && !isWhazing && conv.chatwootBaseUrl
+      ? `${conv.chatwootBaseUrl}/app/accounts/${conv.accountId}/conversations/${conv.chatwootConversationId}`
+      : null;
+  const whazingUrl =
+    conv && isWhazing && conv.whazingBaseUrl && conv.whazingTicketId != null
+      ? `${conv.whazingBaseUrl.replace(/\/+$/, "")}/ticket/${conv.whazingTicketId}`
+      : null;
 
   return (
     <PageContainer size="wide" className="flex h-full min-h-0 flex-col gap-4">
@@ -1563,85 +1569,88 @@ export function ConversationDetailPage() {
                   Status IS the AI on/off signal (pending = AI handling, open/snoozed = a human owns
                   it, resolved = closed). "Configure agent" stays last so it sits at the right edge. */}
               <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end lg:flex-col lg:flex-nowrap lg:items-end lg:gap-2">
-                <div className="contents lg:flex lg:flex-row lg:flex-wrap lg:items-center lg:justify-end lg:gap-2">
-                  {conv.status === "pending" && (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={busy}
-                      onClick={() =>
-                        runOp(
-                          () =>
-                            api.api.v1.conversations({ id }).handoff.post({}),
-                          t("conversation.handedOff", "Handed off to a human."),
-                        )
-                      }
-                    >
-                      <UserCheck className="h-4 w-4" aria-hidden="true" />
-                      {t("conversation.handoff", "Handoff to human")}
-                    </Button>
-                  )}
-                  {conv.status === "resolved" && (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={busy}
-                      onClick={() =>
-                        returnToAi(
-                          t("conversation.reopened", "Reopened for the AI."),
-                        )
-                      }
-                    >
-                      <RotateCcw className="h-4 w-4" aria-hidden="true" />
-                      {t("conversation.reopen", "Reopen")}
-                    </Button>
-                  )}
-                  {conv.status !== "pending" && conv.status !== "resolved" && (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={busy}
-                      onClick={() =>
-                        returnToAi(
-                          t("conversation.returned", "Returned to the AI."),
-                        )
-                      }
-                    >
-                      <Bot className="h-4 w-4" aria-hidden="true" />
-                      {t("conversation.returnToAi", "Return to AI")}
-                    </Button>
-                  )}
-                  {offerReengage && conv.status === "pending" && (
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      disabled={busy}
-                      onClick={reengage}
-                    >
-                      <Sparkles className="h-4 w-4" aria-hidden="true" />
-                      {t("conversation.respondNow", "Respond now")}
-                    </Button>
-                  )}
-                  {conv.status !== "resolved" && (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={busy}
-                      onClick={() =>
-                        runOp(
-                          () =>
-                            api.api.v1
-                              .conversations({ id })
-                              .status.post({ status: "resolved" }),
-                          t("conversation.resolved", "Conversation resolved."),
-                        )
-                      }
-                    >
-                      <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-                      {t("conversation.resolve", "Resolve")}
-                    </Button>
-                  )}
-                </div>
+                {/* Action buttons: only available for Chatwoot conversations */}
+                {!isWhazing && (
+                  <div className="contents lg:flex lg:flex-row lg:flex-wrap lg:items-center lg:justify-end lg:gap-2">
+                    {conv.status === "pending" && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() =>
+                          runOp(
+                            () =>
+                              api.api.v1.conversations({ id }).handoff.post({}),
+                            t("conversation.handedOff", "Handed off to a human."),
+                          )
+                        }
+                      >
+                        <UserCheck className="h-4 w-4" aria-hidden="true" />
+                        {t("conversation.handoff", "Handoff to human")}
+                      </Button>
+                    )}
+                    {conv.status === "resolved" && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() =>
+                          returnToAi(
+                            t("conversation.reopened", "Reopened for the AI."),
+                          )
+                        }
+                      >
+                        <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                        {t("conversation.reopen", "Reopen")}
+                      </Button>
+                    )}
+                    {conv.status !== "pending" && conv.status !== "resolved" && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() =>
+                          returnToAi(
+                            t("conversation.returned", "Returned to the AI."),
+                          )
+                        }
+                      >
+                        <Bot className="h-4 w-4" aria-hidden="true" />
+                        {t("conversation.returnToAi", "Return to AI")}
+                      </Button>
+                    )}
+                    {offerReengage && conv.status === "pending" && (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        disabled={busy}
+                        onClick={reengage}
+                      >
+                        <Sparkles className="h-4 w-4" aria-hidden="true" />
+                        {t("conversation.respondNow", "Respond now")}
+                      </Button>
+                    )}
+                    {conv.status !== "resolved" && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() =>
+                          runOp(
+                            () =>
+                              api.api.v1
+                                .conversations({ id })
+                                .status.post({ status: "resolved" }),
+                            t("conversation.resolved", "Conversation resolved."),
+                          )
+                        }
+                      >
+                        <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+                        {t("conversation.resolve", "Resolve")}
+                      </Button>
+                    )}
+                  </div>
+                )}
                 <div className="contents lg:flex lg:flex-row lg:flex-wrap lg:items-center lg:justify-end lg:gap-2">
                   <Link
                     to={`/logs?conversationId=${id}`}
@@ -1659,6 +1668,17 @@ export function ConversationDetailPage() {
                     >
                       <ExternalLink className="h-4 w-4" aria-hidden="true" />
                       {t("conversation.openInChatwoot", "Open in Chatwoot")}
+                    </a>
+                  )}
+                  {whazingUrl && (
+                    <a
+                      href={whazingUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary"
+                    >
+                      <ExternalLink className="h-4 w-4" aria-hidden="true" />
+                      {t("conversation.openInWhazing", "Open in Whazing")}
                     </a>
                   )}
                   {conv.agentId && (
@@ -1693,15 +1713,17 @@ export function ConversationDetailPage() {
                     </p>
                   </div>
                 </div>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={busy}
-                  onClick={reengage}
-                >
-                  <RotateCcw className="h-4 w-4" aria-hidden="true" />
-                  {t("conversation.reengage.action", "Re-engage")}
-                </Button>
+                {!isWhazing && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy}
+                    onClick={reengage}
+                  >
+                    <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                    {t("conversation.reengage.action", "Re-engage")}
+                  </Button>
+                )}
               </Card>
             )}
 
@@ -1739,24 +1761,42 @@ export function ConversationDetailPage() {
                   </div>
                 </div>
               ) : messagesUnavailable ? (
-                // The live Chatwoot thread is unreachable, but the activity trail is OUR data
-                // (execution_logs) — still show it (incl. tool errors) below a non-blocking retry
-                // notice, instead of hiding the whole timeline.
+                // The live thread is unreachable. Activity trail (our execution_logs) is always
+                // shown — for Whazing a retry link + "open in Whazing" is offered instead of the
+                // Chatwoot-specific retry.
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-col items-center gap-3 py-6 text-center">
                     <p className="text-sm text-text-muted">
-                      {t(
-                        "conversation.messagesUnavailable",
-                        "Couldn't load the messages from Chatwoot.",
-                      )}
+                      {isWhazing
+                        ? t(
+                            "conversation.messagesUnavailableWhazing",
+                            "Couldn't load the messages from Whazing.",
+                          )
+                        : t(
+                            "conversation.messagesUnavailable",
+                            "Couldn't load the messages from Chatwoot.",
+                          )}
                     </p>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => loadMessages()}
-                    >
-                      {t("conversation.retry", "Retry")}
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => loadMessages()}
+                      >
+                        {t("conversation.retry", "Retry")}
+                      </Button>
+                      {isWhazing && whazingUrl && (
+                        <a
+                          href={whazingUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary"
+                        >
+                          <ExternalLink className="h-4 w-4" aria-hidden="true" />
+                          {t("conversation.openInWhazing", "Open in Whazing")}
+                        </a>
+                      )}
+                    </div>
                   </div>
                   {timeline.items.map((item) =>
                     item.kind !== "message" ? (

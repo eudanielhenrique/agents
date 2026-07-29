@@ -40,7 +40,7 @@ export class AgentStatusReporter extends BaseCallbackHandler {
   ): void {
     if (this.conversationDbId == null) return;
     broadcastAgentActivity(this.tenantId, {
-      conversationId: this.conversationDbId.toString(),
+      conversationId: `c_${this.conversationDbId.toString()}`,
       phase,
       stage,
       tool,

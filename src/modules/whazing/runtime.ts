@@ -24,6 +24,66 @@ import { renderWhazingMessage } from "./render";
 import { buildWhazingNativeTools } from "./tools";
 import type { NormalizedWhazingEvent } from "./types";
 
+// Upsert the WhazingConversation mirror row so the Conversations page can show Whazing tickets.
+// Returns the row id (used as conversationId in ExecutionLog for trail markers).
+async function upsertWhazingConversation(
+  base: PrismaClient,
+  ctx: TenantContext,
+  params: {
+    instanceId: bigint;
+    inboxId: bigint | null;
+    ticketId: number;
+    threadId: string;
+    agentId: bigint;
+    status: string | null;
+    assignedUserId: number | null;
+    contactId: number | null;
+    contactName: string | null;
+  },
+): Promise<bigint> {
+  const now = new Date();
+  const status = params.status === "closed" ? "resolved" : (params.status ?? "open");
+  const row = await runScopedOn(base, ctx, (db) =>
+    // @ts-ignore — WhazingConversation added to schema; types regenerate at build time
+    db.whazingConversation.upsert({
+      where: {
+        tenantId_instanceId_ticketId: {
+          tenantId: ctx.tenantId!,
+          instanceId: params.instanceId,
+          ticketId: params.ticketId,
+        },
+      },
+      create: {
+        tenantId: ctx.tenantId!,
+        instanceId: params.instanceId,
+        inboxId: params.inboxId,
+        ticketId: params.ticketId,
+        threadId: params.threadId,
+        status,
+        assignedUserId: params.assignedUserId,
+        contactId: params.contactId,
+        contactName: params.contactName,
+        agentId: params.agentId,
+        lastEventAt: now,
+        lastInboundAt: now,
+      },
+      update: {
+        status,
+        assignedUserId: params.assignedUserId,
+        contactId: params.contactId ?? undefined,
+        contactName: params.contactName ?? undefined,
+        agentId: params.agentId,
+        lastEventAt: now,
+        lastInboundAt: now,
+        lastError: null,
+        lastErrorAt: null,
+      },
+      select: { id: true },
+    }),
+  );
+  return row.id as bigint;
+}
+
 // Whazing agent runtime. Parallel to runAgentTurn in src/graph/runtime.ts but transport-aware:
 // uses WhazingClient instead of ChatwootClient, resolves the inbox via WhazingInbox (not
 // Chatwoot Inbox), and injects Whazing-native tools (handoff/close/note — see tools.ts).
@@ -58,13 +118,13 @@ export async function runWhazingAgentTurn(
     if (event.queueId != null) {
       const specific = await db.whazingInbox.findFirst({
         where: { tenantId, instanceId, whazingQueueId: String(event.queueId) },
-        select: { agentId: true },
+        select: { id: true, agentId: true },
       });
       if (specific) return specific;
     }
     return db.whazingInbox.findFirst({
       where: { tenantId, instanceId, whazingQueueId: null },
-      select: { agentId: true },
+      select: { id: true, agentId: true },
     });
   });
 
@@ -83,7 +143,7 @@ export async function runWhazingAgentTurn(
 
   // Load agent config. instanceId=0 prevents accidental matches in Chatwoot tables;
   // conversationId=ticketId is a no-match placeholder — conv will be null.
-  // TODO: add a dedicated WhazingConversation row for proper contact/inbox prompt vars.
+  // TODO: populate contact/inbox prompt vars from WhazingConversation once wired.
   const loaded = await runScopedOn(base, sysCtx(tenantId), (db) =>
     loadAgentConfig(db, {
       tenantId,
@@ -95,11 +155,32 @@ export async function runWhazingAgentTurn(
   );
   if (!loaded) return "no-agent";
 
+  // Upsert the conversation mirror so the Conversations page shows this ticket.
+  // Done before the flow context so the trail markers get the right conversationId.
+  const whazingConvId = await upsertWhazingConversation(
+    base,
+    sysCtx(tenantId),
+    {
+      instanceId,
+      inboxId: inbox.id ?? null,
+      ticketId,
+      threadId,
+      agentId,
+      status: event.status,
+      assignedUserId: event.assignedUserId,
+      contactId: event.contact?.id ?? null,
+      contactName: event.contact?.name ?? null,
+    },
+  ).catch((e) => {
+    logger.warn("whazing conv upsert failed (non-fatal): %s", e instanceof Error ? e.message : String(e));
+    return null;
+  });
+
   const flow: FlowContext = {
     tenantId,
     turnId: crypto.randomUUID(),
     source: "inbox",
-    conversationId: null,
+    conversationId: whazingConvId,
     agentId,
     inboxId: null,
     threadId,
@@ -222,6 +303,19 @@ export async function runWhazingAgentTurn(
       reply.length,
     );
     return "posted";
+  } catch (err) {
+    // Write the error to the conversation mirror so the operator sees it in the Conversations page.
+    if (whazingConvId) {
+      const msg = err instanceof Error ? err.message : String(err);
+      runScopedOn(base, sysCtx(tenantId), (db) =>
+        // @ts-ignore
+        db.whazingConversation.update({
+          where: { id: whazingConvId },
+          data: { lastError: msg.slice(0, 500), lastErrorAt: new Date() },
+        }),
+      ).catch(() => {});
+    }
+    throw err;
   } finally {
     clearTurnInFlight(threadId);
   }

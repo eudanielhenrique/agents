@@ -1009,7 +1009,7 @@ export async function processChatwootDelivery(
   // post-write snapshot the mirror computed. Metadata only — no PII on the wire.
   if (mirror.applied && mirror.conversationRowId !== null) {
     broadcastConversationEvent(params.tenantId, {
-      conversationId: String(mirror.conversationRowId),
+      conversationId: `c_${String(mirror.conversationRowId)}`,
       status: mirror.status,
       assigneeId: mirror.assigneeId,
       assigneeType: mirror.assigneeType,
@@ -1192,7 +1192,7 @@ export async function processChatwootDelivery(
             // UI. Best-effort; keyed by the DB id.
             if (mirror.conversationRowId !== null) {
               broadcastAgentActivity(params.tenantId, {
-                conversationId: String(mirror.conversationRowId),
+                conversationId: `c_${String(mirror.conversationRowId)}`,
                 phase: "started",
                 stage: "debounce",
                 tool: null,

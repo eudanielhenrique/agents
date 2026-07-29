@@ -151,6 +151,20 @@ export class WhazingClient implements InboxReplyClient {
     return this.request("POST", "/updatetag", { contactId, tags });
   }
 
+  // Download a media file from a Whazing URL using the Bearer token.
+  // Used by getWhazingConversationMedia to proxy attachments through our origin.
+  async downloadMedia(url: string): Promise<{ bytes: ArrayBuffer; contentType: string }> {
+    const res = await this.fetchImpl(url, {
+      headers: { Authorization: `Bearer ${this.config.apiKey}` },
+      redirect: "error",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!res.ok) throw new WhazingApiError(res.status, `GET ${url} (media)`);
+    const bytes = await res.arrayBuffer();
+    const contentType = res.headers.get("content-type") ?? "application/octet-stream";
+    return { bytes, contentType };
+  }
+
   // ── Kanban Pro operations ──
 
   // List all boards visible to this instance.
