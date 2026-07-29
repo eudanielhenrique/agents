@@ -1,7 +1,7 @@
 import { Elysia, t } from "elysia";
 import { doc, errors } from "@/api/lib/openapi";
 import { tenancyPlugin } from "@/api/middlewares/tenancy";
-import { ForbiddenError, TenantTargetRequiredError } from "@/lib/errors";
+import { ForbiddenError, NotFoundError, TenantTargetRequiredError } from "@/lib/errors";
 import { instanceIdentity } from "@/lib/instance";
 import type { TenantContext } from "@/lib/tenancy";
 import {
@@ -12,6 +12,7 @@ import {
   reconnectWhazingInstance,
   updateWhazingInstance,
 } from "@/modules/whazing/management";
+import { loadWhazingClient } from "@/modules/whazing/instance";
 
 // Whazing instance management (per-tenant). TENANT_ADMIN. apiKey is write-only —
 // never returned in any response. routeToken is encrypted at rest and exposed only
@@ -187,5 +188,73 @@ export const whazingController = new Elysia({
         "Clear disconnectedAt to resume webhook processing for a previously disconnected instance.",
       ),
       response: errors(400, 401, 403, 404),
+    },
+  )
+  // ── Kanban Pro resource proxies (editor-time pickers) ────────────────────────
+  .get(
+    "/instances/:id/kanban/boards",
+    async ({ tenantContext, params }) => {
+      const ctx = ctxOrThrow(tenantContext);
+      const client = await loadWhazingClient(
+        ctx.tenantId as bigint,
+        BigInt(params.id),
+      ).catch(() => {
+        throw new NotFoundError();
+      });
+      const data = (await client.kanbanGetBoards()) as Record<string, unknown>;
+      const boards = (Array.isArray(data?.boards) ? data.boards : []) as Array<{
+        id: number;
+        name: string;
+        color?: string;
+        description?: string;
+      }>;
+      return {
+        boards: boards.map((b) => ({ id: b.id, name: b.name, color: b.color ?? null })),
+      };
+    },
+    {
+      requireRole: "TENANT_ADMIN",
+      params: t.Object({ id: t.String() }),
+      detail: doc(
+        "List Whazing Kanban boards",
+        "Proxy to GET /kanbanpro/boards on the Whazing instance. Used by the agent editor board picker.",
+      ),
+      response: errors(401, 403, 404),
+    },
+  )
+  .get(
+    "/instances/:id/kanban/boards/:boardId/columns",
+    async ({ tenantContext, params }) => {
+      const ctx = ctxOrThrow(tenantContext);
+      const client = await loadWhazingClient(
+        ctx.tenantId as bigint,
+        BigInt(params.id),
+      ).catch(() => {
+        throw new NotFoundError();
+      });
+      const data = (await client.kanbanGetColumns(Number(params.boardId))) as Record<
+        string,
+        unknown
+      >;
+      const columns = (Array.isArray(data?.columns) ? data.columns : []) as Array<{
+        id: number;
+        name: string;
+        color?: string;
+        position?: number;
+      }>;
+      return {
+        columns: columns
+          .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+          .map((c) => ({ id: c.id, name: c.name, color: c.color ?? null })),
+      };
+    },
+    {
+      requireRole: "TENANT_ADMIN",
+      params: t.Object({ id: t.String(), boardId: t.String() }),
+      detail: doc(
+        "List Whazing Kanban columns",
+        "Proxy to GET /kanbanpro/boards/:boardId/columns. Used by the agent editor column picker.",
+      ),
+      response: errors(401, 403, 404),
     },
   );

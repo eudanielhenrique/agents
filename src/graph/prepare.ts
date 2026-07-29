@@ -745,8 +745,19 @@ export async function buildToolset(
       parts.push(`Whazing queue ID for human handoff: ${cfg.handoffConfig.whazingQueueId}`);
     toolInstructions.handoff_to_human = parts.join("\n");
   }
-  if (cfg.kanbanConfig.instructions) {
-    toolInstructions.kanban_move_card = cfg.kanbanConfig.instructions;
+  if (cfg.kanbanConfig.instructions || cfg.kanbanConfig.whazingBoard) {
+    const parts: string[] = [];
+    if (cfg.kanbanConfig.whazingBoard) {
+      const wb = cfg.kanbanConfig.whazingBoard;
+      const colList = wb.columns
+        .map((c) => `  • ${c.name} (columnId: ${c.id})`)
+        .join("\n");
+      parts.push(
+        `Whazing Kanban board: "${wb.boardName}" (boardId: ${wb.boardId}).\nAvailable columns:\n${colList}`,
+      );
+    }
+    if (cfg.kanbanConfig.instructions) parts.push(cfg.kanbanConfig.instructions);
+    toolInstructions.kanban_move_card = parts.join("\n\n");
   }
   return [
     ...deps.buildNativeTools(

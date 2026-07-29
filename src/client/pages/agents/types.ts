@@ -30,6 +30,14 @@ type HoursData = Awaited<
 >["data"];
 export type Hours = NonNullable<HoursData>["businessHours"][number];
 
+// Whazing Kanban Pro board snapshot saved in agent.settings.kanban.whazingBoard.
+export interface KanbanWhazingBoardState {
+  instanceId: string;
+  boardId: number;
+  boardName: string;
+  columns: Array<{ id: number; name: string; color?: string | null }>;
+}
+
 // UI-side handoff config (the editor's working copy). `target` encodes the pinned pick as
 // "agent:<id>" | "team:<id>" | "" so one <Select> offers both groups; AgentEditorPage splits it
 // back into targetAgentId/targetTeamId on save. Lives on the handoff_to_human tool (Tools tab).

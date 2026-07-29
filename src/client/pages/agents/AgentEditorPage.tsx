@@ -89,6 +89,7 @@ import type {
   GrantState,
   HandoffUiState,
   Hours,
+  KanbanWhazingBoardState,
   ToolCatalog,
   ToolSelectionView,
   VaultEntry,
@@ -270,9 +271,18 @@ function readBehaviorState(a: Agent) {
   const ka = (s.kanban ?? {}) as Record<string, unknown>;
   const tg = (s.toolGuidance ?? {}) as Record<string, unknown>;
   const li = (s.limits ?? {}) as Record<string, unknown>;
+
+  // Whazing kanban board snapshot: { instanceId, boardId, boardName, columns }
+  const rawBoard = ka.whazingBoard;
+  const kanbanWhazingBoard =
+    rawBoard && typeof rawBoard === "object" && !Array.isArray(rawBoard)
+      ? (rawBoard as import("./types").KanbanWhazingBoardState)
+      : null;
+
   return {
     transferWithSummary: a.transferWithSummary,
     kanbanInstructions: str(ka.instructions),
+    kanbanWhazingBoard,
     customAttributeInstructions: str(tg.set_custom_attribute),
     labelInstructions: str(tg.assign_label),
     updateKanbanTaskInstructions: str(tg.update_kanban_task),
@@ -629,6 +639,8 @@ export function AgentEditorPage() {
   // Operator funnel guidance for kanban_move_card (Tools-tab config, like handoff). Synced only by
   // syncToolConfig (NOT applyAgent), so a Behavior save never wipes an unsaved edit here.
   const [kanbanInstructions, setKanbanInstructions] = useState("");
+  const [kanbanWhazingBoard, setKanbanWhazingBoard] =
+    useState<KanbanWhazingBoardState | null>(null);
   // Operator usage guidance for set_custom_attribute + assign_label (Tools-tab config, like kanban).
   // Persisted in agent.settings.toolGuidance; synced only by syncToolConfig.
   const [customAttributeInstructions, setCustomAttributeInstructions] =
@@ -728,6 +740,7 @@ export function AgentEditorPage() {
     setTransferWithSummary(b.transferWithSummary);
     setHandoff(b.handoff);
     setKanbanInstructions(b.kanbanInstructions);
+    setKanbanWhazingBoard(b.kanbanWhazingBoard ?? null);
     setCustomAttributeInstructions(b.customAttributeInstructions);
     setLabelInstructions(b.labelInstructions);
     setUpdateKanbanTaskInstructions(b.updateKanbanTaskInstructions);
@@ -1725,7 +1738,10 @@ export function AgentEditorPage() {
         unknown
       >;
       const handoffJson = serializeHandoff(handoff);
-      const kanbanJson = { instructions: kanbanInstructions.trim() || null };
+      const kanbanJson: Record<string, unknown> = {
+        instructions: kanbanInstructions.trim() || null,
+        whazingBoard: kanbanWhazingBoard ?? null,
+      };
       // Merge the per-tool guidance map: preserve any entries for other tools, set/clear ours.
       const existingGuidance = (syncedSettings.toolGuidance ?? {}) as Record<
         string,
@@ -2365,6 +2381,8 @@ export function AgentEditorPage() {
                 setHandoff={setHandoff}
                 kanbanInstructions={kanbanInstructions}
                 setKanbanInstructions={setKanbanInstructions}
+                kanbanWhazingBoard={kanbanWhazingBoard}
+                setKanbanWhazingBoard={setKanbanWhazingBoard}
                 customAttributeInstructions={customAttributeInstructions}
                 setCustomAttributeInstructions={setCustomAttributeInstructions}
                 labelInstructions={labelInstructions}

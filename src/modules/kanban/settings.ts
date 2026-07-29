@@ -1,17 +1,46 @@
 import { readToolInstructions } from "@/modules/handoff/settings";
 
-// Per-agent kanban config, read from `agent.settings.kanban`. Today it only carries the operator's
-// optional funnel guidance, appended to the kanban_move_card tool description (when/why to move a
-// card between steps). The funnel itself stays anchored to the conversation's linked card (one card =
-// one board); this is NOT a funnel selector. Kept as its own module so the shape can grow later.
+// Per-agent kanban config, read from `agent.settings.kanban`.
+export interface KanbanWhazingColumn {
+  id: number;
+  name: string;
+}
+
+// Saved snapshot of a Whazing Kanban Pro board + its columns. Persisted at editor time so the
+// runtime can inject board/column context into the tool description without an extra API call.
+export interface KanbanWhazingBoard {
+  // WhazingInstance id (BigInt serialised as string).
+  instanceId: string;
+  boardId: number;
+  boardName: string;
+  columns: KanbanWhazingColumn[];
+}
+
 export interface KanbanConfig {
   // Operator-authored funnel guidance. null ⇒ none. Trimmed + length-capped on read.
   instructions: string | null;
+  // Whazing Kanban Pro board snapshot. Null on Chatwoot agents (board derived from the conversation).
+  whazingBoard: KanbanWhazingBoard | null;
 }
 
 export const KANBAN_DEFAULTS: KanbanConfig = {
   instructions: null,
+  whazingBoard: null,
 };
+
+function readWhazingBoard(v: unknown): KanbanWhazingBoard | null {
+  if (!v || typeof v !== "object") return null;
+  const b = v as Record<string, unknown>;
+  if (typeof b.boardId !== "number" || typeof b.boardName !== "string") return null;
+  const instanceId = typeof b.instanceId === "string" ? b.instanceId : "";
+  const cols = Array.isArray(b.columns)
+    ? b.columns
+        .filter((c): c is { id: number; name: string } =>
+          typeof c === "object" && c !== null && typeof c.id === "number" && typeof c.name === "string",
+        )
+    : [];
+  return { instanceId, boardId: b.boardId, boardName: b.boardName, columns: cols };
+}
 
 export function readKanbanConfig(settings: unknown): KanbanConfig {
   const s =
@@ -22,5 +51,6 @@ export function readKanbanConfig(settings: unknown): KanbanConfig {
   const bag = s as Record<string, unknown>;
   return {
     instructions: readToolInstructions(bag.instructions),
+    whazingBoard: readWhazingBoard(bag.whazingBoard),
   };
 }

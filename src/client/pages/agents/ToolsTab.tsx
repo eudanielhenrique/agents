@@ -4,7 +4,7 @@ import type { DiscoveredMcpTool } from "@/client/components/mcp/DiscoveredMcpToo
 import { SectionNav } from "./SectionNav";
 import { TabActionBar } from "./TabActionBar";
 import { ToolGrantsEditor } from "./ToolGrantsEditor";
-import type { GrantState, HandoffUiState, ToolCatalog } from "./types";
+import type { GrantState, HandoffUiState, KanbanWhazingBoardState, ToolCatalog } from "./types";
 
 interface ToolsTabProps {
   agentId: string;
@@ -18,6 +18,8 @@ interface ToolsTabProps {
   setHandoff: React.Dispatch<React.SetStateAction<HandoffUiState>>;
   kanbanInstructions: string;
   setKanbanInstructions: (v: string) => void;
+  kanbanWhazingBoard: KanbanWhazingBoardState | null;
+  setKanbanWhazingBoard: React.Dispatch<React.SetStateAction<KanbanWhazingBoardState | null>>;
   customAttributeInstructions: string;
   setCustomAttributeInstructions: (v: string) => void;
   labelInstructions: string;
@@ -61,6 +63,8 @@ export function ToolsTab({
   setHandoff,
   kanbanInstructions,
   setKanbanInstructions,
+  kanbanWhazingBoard,
+  setKanbanWhazingBoard,
   customAttributeInstructions,
   setCustomAttributeInstructions,
   labelInstructions,
@@ -124,6 +128,8 @@ export function ToolsTab({
             setHandoff={setHandoff}
             kanbanInstructions={kanbanInstructions}
             setKanbanInstructions={setKanbanInstructions}
+            kanbanWhazingBoard={kanbanWhazingBoard}
+            setKanbanWhazingBoard={setKanbanWhazingBoard}
             customAttributeInstructions={customAttributeInstructions}
             setCustomAttributeInstructions={setCustomAttributeInstructions}
             labelInstructions={labelInstructions}

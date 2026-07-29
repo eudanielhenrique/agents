@@ -36,7 +36,7 @@ import { cn } from "@/client/lib/utils";
 import { IntegrationEditModal } from "@/client/pages/resources/IntegrationEditModal";
 import { McpEditModal } from "@/client/pages/resources/McpEditModal";
 import { ToolEditModal } from "@/client/pages/resources/ToolEditModal";
-import type { GrantState, HandoffUiState, ToolCatalog } from "./types";
+import type { GrantState, HandoffUiState, KanbanWhazingBoardState, ToolCatalog } from "./types";
 
 // Service-logo adapters so a toolpack integration shows its brand mark in the SelectableCard's
 // `icon` slot (which expects a LucideIcon). Module-level → stable identity (no remount per render).
@@ -109,6 +109,10 @@ interface Props {
   // steps), appended to its model-facing description. Persisted in agent.settings.kanban.instructions.
   kanbanInstructions: string;
   setKanbanInstructions: (v: string) => void;
+  // Whazing Kanban Pro board snapshot: which board + columns the agent operates on.
+  // Null on Chatwoot agents (board is derived from the conversation at runtime).
+  kanbanWhazingBoard: KanbanWhazingBoardState | null;
+  setKanbanWhazingBoard: React.Dispatch<React.SetStateAction<KanbanWhazingBoardState | null>>;
   // Operator-authored guidance for set_custom_attribute + assign_label (when to use each scope/label/
   // attribute), appended to their model-facing descriptions. Persisted in agent.settings.toolGuidance.
   customAttributeInstructions: string;
@@ -437,6 +441,8 @@ export function ToolGrantsEditor({
   setHandoff,
   kanbanInstructions,
   setKanbanInstructions,
+  kanbanWhazingBoard,
+  setKanbanWhazingBoard,
   customAttributeInstructions,
   setCustomAttributeInstructions,
   labelInstructions,
@@ -465,6 +471,72 @@ export function ToolGrantsEditor({
   const [pendingIntegrationId, setPendingIntegrationId] = useState<
     string | null
   >(null);
+
+  // ── Whazing Kanban Pro board picker ──────────────────────────────────────────
+  const [whazingInstances, setWhazingInstances] = useState<
+    Array<{ id: string; name: string }>
+  >([]);
+  const [selectedInstanceId, setSelectedInstanceId] = useState<string>(
+    kanbanWhazingBoard?.instanceId ?? "",
+  );
+  const [boardsList, setBoardsList] = useState<
+    Array<{ id: number; name: string; color: string | null }>
+  >([]);
+  const [boardsLoading, setBoardsLoading] = useState(false);
+  const [columnsLoading, setColumnsLoading] = useState(false);
+
+  // Load Whazing instances once (for the instance picker).
+  useEffect(() => {
+    api.api.v1.whazing.instances.get().then((res) => {
+      if (res.data?.instances) {
+        setWhazingInstances(
+          res.data.instances.map((i: { id: string | number; name: string }) => ({
+            id: String(i.id),
+            name: i.name,
+          })),
+        );
+        // Auto-select the first instance if none saved.
+        if (!selectedInstanceId && res.data.instances.length === 1) {
+          setSelectedInstanceId(String(res.data.instances[0].id));
+        }
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Load boards when the selected instance changes.
+  useEffect(() => {
+    if (!selectedInstanceId) return;
+    setBoardsLoading(true);
+    setBoardsList([]);
+    api.api.v1.whazing
+      .instances({ id: selectedInstanceId })
+      .kanban.boards.get()
+      .then((res) => {
+        if (res.data?.boards) setBoardsList(res.data.boards as Array<{ id: number; name: string; color: string | null }>);
+      })
+      .finally(() => setBoardsLoading(false));
+  }, [selectedInstanceId]);
+
+  function loadColumnsForBoard(boardId: number, boardName: string) {
+    setColumnsLoading(true);
+    api.api.v1.whazing
+      .instances({ id: selectedInstanceId })
+      .kanban.boards({ boardId: String(boardId) })
+      .columns.get()
+      .then((res) => {
+        if (res.data?.columns) {
+          setKanbanWhazingBoard({
+            instanceId: selectedInstanceId,
+            boardId,
+            boardName,
+            columns: res.data.columns as Array<{ id: number; name: string; color: string | null }>,
+          });
+        }
+      })
+      .finally(() => setColumnsLoading(false));
+  }
+
   const kindLabel = (kind: string | null | undefined) => {
     switch (kind) {
       case "NATIVE":
@@ -511,10 +583,11 @@ export function ToolGrantsEditor({
   // collapsed section header so the operator knows hidden settings are in play. Mirrors each card's
   // own `configured` signal.
   const nativeConfigured =
-    handoffEnabled &&
-    (handoff.instructions.trim() !== "" ||
-      !transferWithSummary ||
-      handoff.whazingQueueId.trim() !== "");
+    (handoffEnabled &&
+      (handoff.instructions.trim() !== "" ||
+        !transferWithSummary ||
+        handoff.whazingQueueId.trim() !== "")) ||
+    (kanbanEnabled && (kanbanInstructions.trim() !== "" || kanbanWhazingBoard != null));
 
 
   // Apply the deferred auto-grant for a just-created integration once it appears in the refreshed
@@ -1166,14 +1239,99 @@ export function ToolGrantsEditor({
             icon={nativeToolMeta(KANBAN_TOOL, t).icon}
             title={nativeToolMeta(KANBAN_TOOL, t).label}
             description={nativeToolMeta(KANBAN_TOOL, t).description}
-            configured={kanbanInstructions.trim() !== ""}
+            configured={kanbanInstructions.trim() !== "" || kanbanWhazingBoard != null}
           >
+            {/* Whazing Kanban Pro board picker */}
+            <FormField
+              label={t("editor.kanbanWhazingConnection", "Whazing connection")}
+              description={t(
+                "editor.kanbanWhazingConnectionHint",
+                "Select the Whazing instance to load boards from.",
+              )}
+            >
+              <select
+                value={selectedInstanceId}
+                onChange={(e) => {
+                  setSelectedInstanceId(e.target.value);
+                  setKanbanWhazingBoard(null);
+                }}
+                className="w-full rounded-lg border border-border bg-bg-secondary px-3 py-2 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-accent/50"
+              >
+                <option value="">{t("common.select", "Select…")}</option>
+                {whazingInstances.map((inst) => (
+                  <option key={inst.id} value={inst.id}>
+                    {inst.name}
+                  </option>
+                ))}
+              </select>
+            </FormField>
+
+            {selectedInstanceId && (
+              <FormField
+                label={t("editor.kanbanWhazingBoard", "Board")}
+                description={t(
+                  "editor.kanbanWhazingBoardHint",
+                  "Choose the Kanban Pro board this agent operates on. Columns will load automatically.",
+                )}
+              >
+                <select
+                  value={kanbanWhazingBoard?.boardId ?? ""}
+                  onChange={(e) => {
+                    const id = Number(e.target.value);
+                    const board = boardsList.find((b) => b.id === id);
+                    if (board) loadColumnsForBoard(board.id, board.name);
+                    else setKanbanWhazingBoard(null);
+                  }}
+                  disabled={boardsLoading}
+                  className="w-full rounded-lg border border-border bg-bg-secondary px-3 py-2 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-accent/50 disabled:opacity-50"
+                >
+                  <option value="">
+                    {boardsLoading
+                      ? t("common.loading", "Loading…")
+                      : t("common.select", "Select…")}
+                  </option>
+                  {boardsList.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              </FormField>
+            )}
+
+            {kanbanWhazingBoard && (
+              <FormField
+                label={t("editor.kanbanWhazingColumns", "Columns")}
+                group
+                description={t(
+                  "editor.kanbanWhazingColumnsHint",
+                  "These IDs are injected into the agent's kanban tool description so it knows which columnId to use.",
+                )}
+              >
+                {columnsLoading ? (
+                  <p className="text-text-muted text-xs">{t("common.loading", "Loading…")}</p>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    {kanbanWhazingBoard.columns.map((col) => (
+                      <div
+                        key={col.id}
+                        className="flex items-center justify-between rounded-md border border-border bg-bg-tertiary px-3 py-1.5 text-xs"
+                      >
+                        <span className="text-text-primary">{col.name}</span>
+                        <span className="font-mono text-text-muted">ID: {col.id}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </FormField>
+            )}
+
             <FormField
               label={t("editor.kanbanInstructions", "Funnel guidance")}
               group
               description={t(
                 "editor.kanbanInstructionsHint",
-                "Optional. Explains your funnel and when to move a card between steps. The AI already sees the current step, the available steps, and the card data; this adds your rules. Appended to the kanban tool description.",
+                "Optional. Explains when to move a card between columns. The board and column IDs above are already injected automatically.",
               )}
             >
               <Textarea
@@ -1182,7 +1340,7 @@ export function ToolGrantsEditor({
                 rows={3}
                 placeholder={t(
                   "editor.kanbanInstructionsPlaceholder",
-                  'e.g. Move to "Proposal sent" only after pricing was shared. Never skip steps.',
+                  'e.g. Move to "Proposta" only after pricing was shared. Move to "Fechado" when customer confirms.',
                 )}
               />
             </FormField>
