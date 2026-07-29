@@ -145,11 +145,16 @@ export async function runWhazingAgentTurn(
   // buildNativeTools ignores ctx.client entirely; instead, it closes over the actual
   // WhazingClient and ticketId via the outer closure.
   const whazingNativeTools: ToolBuildDeps["buildNativeTools"] = (
-    _ctx,
+    nativeCtx,
     allowed,
   ) =>
     buildWhazingNativeTools(
-      { client, ticketId, timezone: loaded.timezone },
+      {
+        client,
+        ticketId,
+        timezone: loaded.timezone,
+        toolInstructions: nativeCtx.toolInstructions,
+      },
       allowed,
     );
   const tools = await buildToolset(

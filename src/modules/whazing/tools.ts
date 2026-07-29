@@ -20,6 +20,7 @@ export interface WhazingToolCtx {
   client: WhazingClient;
   ticketId: number;
   timezone?: string;
+  toolInstructions?: Partial<Record<string, string>>;
 }
 
 function handoffToHumanTool(ctx: WhazingToolCtx) {
@@ -73,8 +74,14 @@ function handoffToHumanTool(ctx: WhazingToolCtx) {
     },
     {
       name: "handoff_to_human",
-      description:
+      description: [
         "Escalate the ticket to a human agent. Optionally provide a queue ID to route to a specific queue, a short summary (posted as a private note), and a customer-facing message to send before transferring. Before transferring, set `customerMessage` to a brief reply to the customer (e.g. that a human will continue) so they are not left without an answer.",
+        ctx.toolInstructions?.handoff_to_human?.trim()
+          ? `Operator guidance: ${ctx.toolInstructions.handoff_to_human.trim()}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
       schema: z.object({
         reason: z
           .string()
