@@ -738,8 +738,12 @@ export async function buildToolset(
   };
   // handoff/kanban guidance lives in their own grouped config; let it win over the flat map for those
   // two tools (the editor writes them there, not into settings.toolGuidance).
-  if (cfg.handoffConfig.instructions) {
-    toolInstructions.handoff_to_human = cfg.handoffConfig.instructions;
+  if (cfg.handoffConfig.instructions || cfg.handoffConfig.whazingQueueId != null) {
+    const parts: string[] = [];
+    if (cfg.handoffConfig.instructions) parts.push(cfg.handoffConfig.instructions);
+    if (cfg.handoffConfig.whazingQueueId != null)
+      parts.push(`Whazing queue ID for human handoff: ${cfg.handoffConfig.whazingQueueId}`);
+    toolInstructions.handoff_to_human = parts.join("\n");
   }
   if (cfg.kanbanConfig.instructions) {
     toolInstructions.kanban_move_card = cfg.kanbanConfig.instructions;

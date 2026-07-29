@@ -15,7 +15,6 @@ import { useTranslation } from "react-i18next";
 import {
   Badge,
   Button,
-  Dropdown,
   FormField,
   SelectableCard,
   SwitchField,
@@ -80,6 +79,17 @@ const LABEL_TOOL = "assign_label";
 // update_kanban_task (edit the linked card's title/description/priority/dates) also takes optional
 // operator guidance, so it renders as a configurable card next to kanban_move_card.
 const UPDATE_KANBAN_TOOL = "update_kanban_task";
+
+// Tools that are Chatwoot-only and unavailable on Whazing. Hidden from the editor since the active
+// transport is Whazing. Kept in the allowlist catalog for back-compat if Chatwoot is re-enabled.
+const CHATWOOT_ONLY_TOOLS = new Set([
+  KANBAN_TOOL,
+  UPDATE_KANBAN_TOOL,
+  ATTR_TOOL,
+  LABEL_TOOL,
+  "set_voice_preference",
+  "react_to_message",
+]);
 
 interface Props {
   // The agent being edited — scopes the handoff target picker to the accounts it serves.
@@ -475,108 +485,38 @@ export function ToolGrantsEditor({
   const nonRag = grants.filter((g) => g.source !== "RAG");
 
   const nativeGrant = grants.find((g) => g.source === "NATIVE");
-  const allNativeNames = catalog.native.map((n) => n.name);
+  // Filter out Chatwoot-only tools — only show what works on the active Whazing transport.
+  const visibleNative = catalog.native.filter(
+    (n) => !CHATWOOT_ONLY_TOOLS.has(n.name),
+  );
+  const allNativeNames = visibleNative.map((n) => n.name);
   // No explicit NATIVE row ⇒ all native tools (the permissive default for new/legacy agents). The
   // first toggle persists an explicit allowlist (which may even become empty = no native tools).
   const selectedNative = nativeGrant
     ? new Set(nativeGrant.enabledTools ?? [])
     : new Set(allNativeNames);
   const handoffEnabled = selectedNative.has(HANDOFF_TOOL);
-  // handoff_to_human + kanban_move_card carry their own settings; rendered as configurable cards
-  // (toggle + inline config) outside the simple-toggle grid below.
-  const handoffEntry = catalog.native.find((n) => n.name === HANDOFF_TOOL);
-  const kanbanEnabled = selectedNative.has(KANBAN_TOOL);
-  const kanbanEntry = catalog.native.find((n) => n.name === KANBAN_TOOL);
-  const attrEnabled = selectedNative.has(ATTR_TOOL);
-  const attrEntry = catalog.native.find((n) => n.name === ATTR_TOOL);
-  const labelEnabled = selectedNative.has(LABEL_TOOL);
-  const labelEntry = catalog.native.find((n) => n.name === LABEL_TOOL);
-  const updateKanbanEnabled = selectedNative.has(UPDATE_KANBAN_TOOL);
-  const updateKanbanEntry = catalog.native.find(
-    (n) => n.name === UPDATE_KANBAN_TOOL,
-  );
+  // handoff_to_human carries its own settings; rendered as a configurable card outside the grid below.
+  const handoffEntry = visibleNative.find((n) => n.name === HANDOFF_TOOL);
+  // Chatwoot-only tools: always null since filtered out; kept for type-safety in unused card guards.
+  const kanbanEnabled = false;
+  const kanbanEntry = undefined;
+  const attrEnabled = false;
+  const attrEntry = undefined;
+  const labelEnabled = false;
+  const labelEntry = undefined;
+  const updateKanbanEnabled = false;
+  const updateKanbanEntry = undefined;
 
   // True when any ENABLED configurable native tool holds non-default config — surfaces a dot on the
   // collapsed section header so the operator knows hidden settings are in play. Mirrors each card's
   // own `configured` signal.
   const nativeConfigured =
-    (handoffEnabled &&
-      (handoff.mode !== "route" ||
-        handoff.instructions.trim() !== "" ||
-        !transferWithSummary)) ||
-    (kanbanEnabled && kanbanInstructions.trim() !== "") ||
-    (attrEnabled && customAttributeInstructions.trim() !== "") ||
-    (labelEnabled && labelInstructions.trim() !== "") ||
-    (updateKanbanEnabled && updateKanbanTaskInstructions.trim() !== "");
+    handoffEnabled &&
+    (handoff.instructions.trim() !== "" ||
+      !transferWithSummary ||
+      handoff.whazingQueueId.trim() !== "");
 
-  // Agents/teams + the accounts the agent serves, for the "pinned" handoff target picker. Scoped to
-  // the agent (by its bound inboxes): a pinned target is account-scoped, so it is only offered when the
-  // agent serves exactly ONE account. Fetched once the handoff tool is enabled (degrades to empty).
-  const [handoffData, setHandoffData] = useState<{
-    agents: Array<{ id: number; name: string }>;
-    teams: Array<{ id: number; name: string }>;
-    accounts: Array<{
-      instanceId: string;
-      accountId: number;
-      accountName: string | null;
-    }>;
-  } | null>(null);
-  useEffect(() => {
-    if (!handoffEnabled || handoffData) return;
-    void (async () => {
-      try {
-        const { data } = await api.api.v1.chatwoot["agents-teams"]({
-          agentId,
-        }).get();
-        setHandoffData(
-          data
-            ? {
-                agents: data.agents,
-                teams: data.teams,
-                accounts: data.accounts,
-              }
-            : { agents: [], teams: [], accounts: [] },
-        );
-      } catch {
-        setHandoffData({ agents: [], teams: [], accounts: [] });
-      }
-    })();
-  }, [handoffEnabled, handoffData, agentId]);
-  // Pinned is available only when the agent serves exactly one account (0 ⇒ no inbox bound, ≥2 ⇒
-  // ambiguous). `pinnedHint` explains why it is disabled; `pinnedInstanceId` is stored with the target.
-  const handoffAccounts = handoffData?.accounts ?? [];
-  const pinnedAvailable = !!handoffData && handoffAccounts.length === 1;
-  const pinnedInstanceId =
-    pinnedAvailable && handoffAccounts[0]
-      ? Number(handoffAccounts[0].instanceId)
-      : null;
-  const pinnedHint = !handoffData
-    ? t("common.loading", "Loading…")
-    : handoffAccounts.length === 0
-      ? t(
-          "editor.handoffPinnedNoInbox",
-          "Bind at least one inbox in the Channels tab first.",
-        )
-      : handoffAccounts.length > 1
-        ? t(
-            "editor.handoffPinnedMultiAccount",
-            "This agent serves inboxes in different Chatwoot accounts; use “Let the AI choose”.",
-          )
-        : undefined;
-  // Auto-switch a stale "pinned" target to "agent_choice" once the fetched data shows the agent is no
-  // longer a single-account agent (its bindings changed in the Channels tab, or its inboxes dropped).
-  // Keeps the SAVED config consistent with what the UI shows and the runtime does; marks the Tools
-  // section unsaved so the operator confirms the change. No loop: after the switch mode !== "pinned".
-  useEffect(() => {
-    if (handoffData && !pinnedAvailable && handoff.mode === "pinned") {
-      setHandoff((h) => ({
-        ...h,
-        mode: "agent_choice",
-        target: "",
-        targetInstanceId: null,
-      }));
-    }
-  }, [handoffData, pinnedAvailable, handoff.mode, setHandoff]);
 
   // Apply the deferred auto-grant for a just-created integration once it appears in the refreshed
   // catalog (so we can enable its full tool set, like the manual toggle does).
@@ -1142,15 +1082,8 @@ export function ToolGrantsEditor({
         }
       >
         <div className="grid gap-2 sm:grid-cols-2">
-          {catalog.native
-            .filter(
-              (n) =>
-                n.name !== HANDOFF_TOOL &&
-                n.name !== KANBAN_TOOL &&
-                n.name !== ATTR_TOOL &&
-                n.name !== LABEL_TOOL &&
-                n.name !== UPDATE_KANBAN_TOOL,
-            )
+          {visibleNative
+            .filter((n) => n.name !== HANDOFF_TOOL)
             .map((n) => {
               const meta = nativeToolMeta(n.name, t);
               return (
@@ -1173,9 +1106,9 @@ export function ToolGrantsEditor({
             title={nativeToolMeta(HANDOFF_TOOL, t).label}
             description={nativeToolMeta(HANDOFF_TOOL, t).description}
             configured={
-              handoff.mode !== "route" ||
               handoff.instructions.trim() !== "" ||
-              !transferWithSummary
+              !transferWithSummary ||
+              handoff.whazingQueueId.trim() !== ""
             }
           >
             <SwitchField
@@ -1187,104 +1120,24 @@ export function ToolGrantsEditor({
               )}
             />
             <FormField
-              label={t("editor.handoffTarget", "Who receives the handoff")}
-              group
+              label={t("editor.whazingQueueId", "Whazing queue ID")}
+              description={t(
+                "editor.whazingQueueIdHint",
+                "Whazing queue number to route the ticket to after handoff. Find it in your Whazing dashboard (queue list).",
+              )}
             >
-              <Dropdown
-                value={handoff.mode}
-                ariaLabel={t(
-                  "editor.handoffTarget",
-                  "Who receives the handoff",
-                )}
-                onChange={(value) =>
-                  setHandoff({
-                    ...handoff,
-                    mode: value,
-                    target: value === "pinned" ? handoff.target : "",
-                    targetInstanceId:
-                      value === "pinned" ? pinnedInstanceId : null,
-                  })
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={handoff.whazingQueueId}
+                onChange={(e) =>
+                  setHandoff({ ...handoff, whazingQueueId: e.target.value })
                 }
-                items={[
-                  {
-                    value: "route",
-                    label: t(
-                      "editor.handoffRoute",
-                      "Chatwoot routing (default)",
-                    ),
-                  },
-                  {
-                    value: "pinned",
-                    label: t(
-                      "editor.handoffPinned",
-                      "A specific agent or team",
-                    ),
-                    disabled: !pinnedAvailable,
-                    disabledHint: pinnedHint,
-                  },
-                  {
-                    value: "agent_choice",
-                    label: t("editor.handoffAgentChoice", "Let the AI choose"),
-                  },
-                ]}
+                placeholder="ex.: 5"
+                className="w-full rounded-lg border border-border bg-bg-secondary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50"
               />
             </FormField>
-            {handoffData && !pinnedAvailable && (
-              <p className="text-text-muted text-xs">{pinnedHint}</p>
-            )}
-            {handoff.mode === "pinned" && pinnedAvailable && (
-              <FormField
-                label={t("editor.handoffPick", "Agent or team")}
-                group
-                description={t(
-                  "editor.handoffPickHint",
-                  "Loaded from your Chatwoot instance.",
-                )}
-              >
-                <Dropdown
-                  value={handoff.target || null}
-                  ariaLabel={t("editor.handoffPick", "Agent or team")}
-                  placeholder={t("editor.handoffNone", "Select…")}
-                  onChange={(value) =>
-                    setHandoff({
-                      ...handoff,
-                      target: value,
-                      targetInstanceId: pinnedInstanceId,
-                    })
-                  }
-                  items={[
-                    ...(handoffData?.agents ?? []).map((a) => ({
-                      value: `agent:${a.id}`,
-                      label: a.name,
-                      description: t("editor.handoffAgents", "Agents"),
-                    })),
-                    ...(handoffData?.teams ?? []).map((tm) => ({
-                      value: `team:${tm.id}`,
-                      label: tm.name,
-                      description: t("editor.handoffTeams", "Teams"),
-                    })),
-                  ]}
-                />
-                {handoffData &&
-                  handoffData.agents.length === 0 &&
-                  handoffData.teams.length === 0 && (
-                    <span className="text-text-muted text-xs">
-                      {t(
-                        "editor.handoffNoTargets",
-                        "No agents or teams found. Connect a Chatwoot instance first.",
-                      )}
-                    </span>
-                  )}
-              </FormField>
-            )}
-            {handoff.mode === "agent_choice" && (
-              <p className="text-text-muted text-xs">
-                {t(
-                  "editor.handoffAgentChoiceHint",
-                  "The AI automatically sees your Chatwoot agents and teams and picks one when handing off. Optionally steer it from the instructions (e.g. send billing questions to Finance).",
-                )}
-              </p>
-            )}
             <FormField
               label={t("editor.handoffInstructions", "Transfer instructions")}
               group

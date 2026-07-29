@@ -776,6 +776,8 @@
     "handoffInstructions": "Transfer instructions",
     "handoffInstructionsHint": "Optional. Centralizes the transfer logic (when and to whom to escalate). Appended to the handoff tool description the AI reads.",
     "handoffInstructionsPlaceholder": "e.g. Only escalate after two failed attempts. Send billing issues to the Finance team.",
+    "whazingQueueId": "Whazing queue ID",
+    "whazingQueueIdHint": "Whazing queue number to route the ticket to after handoff. Find it in your Whazing dashboard (queue list).",
     "handoffNone": "Select…",
     "handoffNoTargets": "No agents or teams found. Connect a Chatwoot instance first.",
     "handoffPick": "Agent or team",

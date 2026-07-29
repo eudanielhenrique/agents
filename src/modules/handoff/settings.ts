@@ -24,6 +24,8 @@ export interface HandoffConfig {
   // transfer logic ("when / to whom to escalate") lives in one place instead of buried in the prompt.
   // null ⇒ no extra guidance. Trimmed + length-capped on read.
   instructions: string | null;
+  // Whazing queue ID to assign the ticket to after handoff. null ⇒ no queue routing.
+  whazingQueueId: number | null;
 }
 
 export const HANDOFF_DEFAULTS: HandoffConfig = {
@@ -32,6 +34,7 @@ export const HANDOFF_DEFAULTS: HandoffConfig = {
   targetTeamId: null,
   targetInstanceId: null,
   instructions: null,
+  whazingQueueId: null,
 };
 
 // Cap operator guidance so it can't bloat the tool description / prompt budget unboundedly.
@@ -63,5 +66,6 @@ export function readHandoffConfig(settings: unknown): HandoffConfig {
     targetTeamId: posInt(bag.targetTeamId),
     targetInstanceId: posInt(bag.targetInstanceId),
     instructions: readToolInstructions(bag.instructions),
+    whazingQueueId: posInt(bag.whazingQueueId),
   };
 }

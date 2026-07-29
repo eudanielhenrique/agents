@@ -209,9 +209,11 @@ function serializeHandoff(h: HandoffUiState): {
   targetTeamId: number | null;
   targetInstanceId: number | null;
   instructions: string | null;
+  whazingQueueId: number | null;
 } {
   const [kind, idStr] = h.target.split(":");
   const id = Number(idStr);
+  const queueIdNum = parseInt(h.whazingQueueId, 10);
   return {
     mode: h.mode,
     targetAgentId:
@@ -220,6 +222,7 @@ function serializeHandoff(h: HandoffUiState): {
     // The account the target was picked from (account-scoped), so the runtime can validate it.
     targetInstanceId: h.mode === "pinned" ? h.targetInstanceId : null,
     instructions: h.instructions.trim() || null,
+    whazingQueueId: !isNaN(queueIdNum) && queueIdNum > 0 ? queueIdNum : null,
   };
 }
 
@@ -331,6 +334,10 @@ function readBehaviorState(a: Agent) {
       targetInstanceId:
         typeof ho.targetInstanceId === "number" ? ho.targetInstanceId : null,
       instructions: str(ho.instructions),
+      whazingQueueId:
+        typeof ho.whazingQueueId === "number" && ho.whazingQueueId > 0
+          ? String(ho.whazingQueueId)
+          : "",
     },
     vision: {
       enabled: typeof vi.enabled === "boolean" ? vi.enabled : false,
@@ -617,6 +624,7 @@ export function AgentEditorPage() {
     target: "",
     targetInstanceId: null,
     instructions: "",
+    whazingQueueId: "",
   });
   // Operator funnel guidance for kanban_move_card (Tools-tab config, like handoff). Synced only by
   // syncToolConfig (NOT applyAgent), so a Behavior save never wipes an unsaved edit here.

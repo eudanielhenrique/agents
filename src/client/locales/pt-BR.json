@@ -777,6 +777,8 @@
     "handoffInstructions": "Instruções de transferência",
     "handoffInstructionsHint": "Opcional. Centraliza a lógica de transferência (quando e para quem escalar). Anexado à descrição da ferramenta de transferência que a IA lê.",
     "handoffInstructionsPlaceholder": "ex.: Só escale após duas tentativas frustradas. Encaminhe questões de cobrança para o time Financeiro.",
+    "whazingQueueId": "ID da fila Whazing",
+    "whazingQueueIdHint": "Número da fila no Whazing para onde o ticket será roteado após a transferência. Encontre na lista de filas do seu painel Whazing.",
     "handoffNone": "Selecione…",
     "handoffNoTargets": "Nenhum agente ou time encontrado. Conecte uma instância do Chatwoot primeiro.",
     "handoffPick": "Agente ou time",

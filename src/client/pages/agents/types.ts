@@ -41,4 +41,7 @@ export interface HandoffUiState {
   // Operator-authored transfer guidance, appended to the handoff_to_human tool description.
   // Persisted in agent.settings.handoff.instructions.
   instructions: string;
+  // Whazing queue ID to route the ticket to after handoff (empty = no routing).
+  // Persisted in agent.settings.handoff.whazingQueueId.
+  whazingQueueId: string;
 }
