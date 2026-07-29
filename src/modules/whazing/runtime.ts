@@ -152,6 +152,7 @@ export async function runWhazingAgentTurn(
       {
         client,
         ticketId,
+        contactId: event.contact?.id ?? undefined,
         timezone: loaded.timezone,
         toolInstructions: nativeCtx.toolInstructions,
       },

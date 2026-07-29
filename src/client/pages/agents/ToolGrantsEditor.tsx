@@ -82,9 +82,8 @@ const UPDATE_KANBAN_TOOL = "update_kanban_task";
 
 // Tools that are Chatwoot-only and unavailable on Whazing. Hidden from the editor since the active
 // transport is Whazing. Kept in the allowlist catalog for back-compat if Chatwoot is re-enabled.
+// NOTE: kanban_move_card and update_kanban_task are NOT here — Whazing has its own Kanban Pro API.
 const CHATWOOT_ONLY_TOOLS = new Set([
-  KANBAN_TOOL,
-  UPDATE_KANBAN_TOOL,
   ATTR_TOOL,
   LABEL_TOOL,
   "set_voice_preference",
@@ -498,15 +497,15 @@ export function ToolGrantsEditor({
   const handoffEnabled = selectedNative.has(HANDOFF_TOOL);
   // handoff_to_human carries its own settings; rendered as a configurable card outside the grid below.
   const handoffEntry = visibleNative.find((n) => n.name === HANDOFF_TOOL);
+  const kanbanEnabled = selectedNative.has(KANBAN_TOOL);
+  const kanbanEntry = visibleNative.find((n) => n.name === KANBAN_TOOL);
+  const updateKanbanEnabled = selectedNative.has(UPDATE_KANBAN_TOOL);
+  const updateKanbanEntry = visibleNative.find((n) => n.name === UPDATE_KANBAN_TOOL);
   // Chatwoot-only tools: always null since filtered out; kept for type-safety in unused card guards.
-  const kanbanEnabled = false;
-  const kanbanEntry = undefined;
   const attrEnabled = false;
   const attrEntry = undefined;
   const labelEnabled = false;
   const labelEntry = undefined;
-  const updateKanbanEnabled = false;
-  const updateKanbanEntry = undefined;
 
   // True when any ENABLED configurable native tool holds non-default config — surfaces a dot on the
   // collapsed section header so the operator knows hidden settings are in play. Mirrors each card's

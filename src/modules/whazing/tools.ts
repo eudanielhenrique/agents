@@ -13,12 +13,14 @@ import type { WhazingClient } from "./client";
 
 // Whazing-native tools that mirror the subset of Chatwoot native tools supported by the
 // WhazingClient. Uses the same tool names so the agent editor's native tool allowlist works
-// without a new catalog. Chatwoot-only tools (set_custom_attribute, assign_label, kanban_*,
+// without a new catalog. Chatwoot-only tools (set_custom_attribute, assign_label,
 // set_voice_preference, react_to_message) are omitted — not available on Whazing.
+// Kanban tools ARE available via the Whazing Kanban Pro API (/kanbanpro/*).
 
 export interface WhazingToolCtx {
   client: WhazingClient;
   ticketId: number;
+  contactId?: number;
   timezone?: string;
   toolInstructions?: Partial<Record<string, string>>;
 }
@@ -208,6 +210,115 @@ function getCurrentTimeTool(ctx: WhazingToolCtx) {
   );
 }
 
+function kanbanMoveCardTool(ctx: WhazingToolCtx) {
+  const hint = ctx.toolInstructions?.kanban_move_card?.trim();
+  return tool(
+    async ({
+      boardId,
+      columnId,
+      note,
+      priority,
+    }: {
+      boardId: number;
+      columnId: number;
+      note?: string;
+      priority?: "none" | "low" | "medium" | "high" | "urgent";
+    }) => {
+      if (ctx.contactId == null) {
+        return "Cannot move kanban card: contact ID not available for this ticket.";
+      }
+      await ctx.client.kanbanCreateOrMove({
+        boardId,
+        columnId,
+        contactId: ctx.contactId,
+        note,
+        priority,
+      });
+      return `Card moved to column ${columnId} on board ${boardId}.`;
+    },
+    {
+      name: "kanban_move_card",
+      description: [
+        "Move (or create) the contact's kanban card to a specific column in the funnel. Use action create_or_move — creates the card if the contact has none on the board, otherwise moves it. Always specify boardId and columnId (integer IDs). Optionally add a note explaining the move and a priority level.",
+        hint ? `Operator guidance: ${hint}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      schema: z.object({
+        boardId: z.number().int().positive().describe("Kanban board ID."),
+        columnId: z.number().int().positive().describe("Target column ID to move the card to."),
+        note: z.string().optional().describe("Short note explaining why the card is being moved."),
+        priority: z
+          .enum(["none", "low", "medium", "high", "urgent"])
+          .optional()
+          .describe("Card priority. Omit to keep existing priority."),
+      }),
+    },
+  );
+}
+
+function updateKanbanTaskTool(ctx: WhazingToolCtx) {
+  const hint = ctx.toolInstructions?.update_kanban_task?.trim();
+  return tool(
+    async ({
+      boardId,
+      title,
+      priority,
+      columnId,
+      note,
+      dueDate,
+    }: {
+      boardId: number;
+      title?: string;
+      priority?: "none" | "low" | "medium" | "high" | "urgent";
+      columnId?: number;
+      note?: string;
+      dueDate?: string;
+    }) => {
+      if (ctx.contactId == null) {
+        return "Cannot update kanban card: contact ID not available for this ticket.";
+      }
+      // Find the contact's existing card on this board.
+      const cards = (await ctx.client.kanbanGetContactCards(ctx.contactId)) as
+        | Array<{ id: number; boardId: number }>
+        | unknown;
+      const list = Array.isArray(cards) ? cards : [];
+      const card = list.find((c) => c.boardId === boardId);
+      if (!card) {
+        return `No kanban card found for this contact on board ${boardId}. Use kanban_move_card to create one first.`;
+      }
+      await ctx.client.kanbanUpdateCard(card.id, {
+        title,
+        priority,
+        columnId,
+        note,
+        dueDate,
+      });
+      return `Kanban card ${card.id} updated on board ${boardId}.`;
+    },
+    {
+      name: "update_kanban_task",
+      description: [
+        "Update fields of the contact's existing kanban card on a board (title, priority, column, note, due date). Requires the card to already exist — use kanban_move_card first to create it. Provide boardId to identify which board's card to update.",
+        hint ? `Operator guidance: ${hint}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      schema: z.object({
+        boardId: z.number().int().positive().describe("Board ID of the card to update."),
+        title: z.string().optional().describe("New card title."),
+        priority: z
+          .enum(["none", "low", "medium", "high", "urgent"])
+          .optional()
+          .describe("New priority level."),
+        columnId: z.number().int().positive().optional().describe("Move to this column ID."),
+        note: z.string().optional().describe("Add a note to the card."),
+        dueDate: z.string().optional().describe("Due date in YYYY-MM-DD format."),
+      }),
+    },
+  );
+}
+
 // Supported Whazing native tool names (subset of the global NATIVE_TOOL_NAMES catalog).
 export const WHAZING_NATIVE_TOOL_NAMES = [
   "handoff_to_human",
@@ -216,6 +327,8 @@ export const WHAZING_NATIVE_TOOL_NAMES = [
   "skip_reply",
   "calculator",
   "get_current_time",
+  "kanban_move_card",
+  "update_kanban_task",
 ] as const;
 
 export type WhazingNativeToolName = (typeof WHAZING_NATIVE_TOOL_NAMES)[number];
@@ -231,6 +344,8 @@ export function buildWhazingNativeTools(
     skipReplyTool(),
     calculatorTool(),
     getCurrentTimeTool(ctx),
+    kanbanMoveCardTool(ctx),
+    updateKanbanTaskTool(ctx),
   ];
   if (!allowed) return all;
   const allow = new Set(allowed);

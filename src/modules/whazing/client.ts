@@ -16,6 +16,11 @@ import type { InboxReplyClient } from "@/lib/transport/inbox-client";
 //   POST {base}/updatetag        — set contact tags (array of tag IDs)
 //   POST {base}/showticket       — get ticket by number
 //   POST {base}/updatecontact    — update contact fields
+//   GET  {base}/kanbanpro/boards               — list boards
+//   GET  {base}/kanbanpro/boards/:id/columns   — list columns of a board
+//   POST {base}/kanbanpro/card                 — create or move card (action: create_or_move)
+//   PUT  {base}/kanbanpro/card/:id             — update card fields
+//   GET  {base}/kanbanpro/contact/:id/cards    — get cards for a contact
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -144,6 +149,54 @@ export class WhazingClient implements InboxReplyClient {
   // and Whazing resolves them. Use ticketId instead of contactId when available.
   setContactTags(contactId: number, tags: string[]): Promise<unknown> {
     return this.request("POST", "/updatetag", { contactId, tags });
+  }
+
+  // ── Kanban Pro operations ──
+
+  // List all boards visible to this instance.
+  kanbanGetBoards(): Promise<unknown> {
+    return this.request("GET", "/kanbanpro/boards");
+  }
+
+  // List columns of a board (for resolving column names to IDs).
+  kanbanGetColumns(boardId: number): Promise<unknown> {
+    return this.request("GET", `/kanbanpro/boards/${boardId}/columns`);
+  }
+
+  // Create or move a card in the funnel. action "create_or_move" creates the card if the
+  // contact has none on the board, otherwise moves the existing card to columnId.
+  kanbanCreateOrMove(params: {
+    boardId: number;
+    columnId: number;
+    contactId: number;
+    note?: string;
+    title?: string;
+    priority?: "none" | "low" | "medium" | "high" | "urgent";
+  }): Promise<unknown> {
+    return this.request("POST", "/kanbanpro/card", {
+      ...params,
+      action: "create_or_move",
+    });
+  }
+
+  // Get all kanban cards associated with a contact (across boards).
+  kanbanGetContactCards(contactId: number): Promise<unknown> {
+    return this.request("GET", `/kanbanpro/contact/${contactId}/cards`);
+  }
+
+  // Update fields of an existing card by its card ID.
+  kanbanUpdateCard(
+    cardId: number,
+    fields: {
+      title?: string;
+      priority?: "none" | "low" | "medium" | "high" | "urgent";
+      columnId?: number;
+      note?: string;
+      assigneeId?: number;
+      dueDate?: string;
+    },
+  ): Promise<unknown> {
+    return this.request("PUT", `/kanbanpro/card/${cardId}`, fields);
   }
 }
 
