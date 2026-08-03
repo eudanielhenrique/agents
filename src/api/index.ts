@@ -33,6 +33,10 @@ import {
   oauthGoogleVaultController,
 } from "@/api/v1/oauth-google.controller";
 import {
+  nuvemshopCallbackController,
+  nuvemshopConnectController,
+} from "@/api/v1/oauth-nuvemshop.controller";
+import {
   oauthMcpCallbackController,
   oauthMcpVaultController,
 } from "@/api/v1/oauth-mcp.controller";
@@ -234,6 +238,8 @@ const api = new Elysia()
   .use(vaultController)
   .use(oauthGoogleVaultController)
   .use(oauthGoogleCallbackController)
+  .use(nuvemshopConnectController)
+  .use(nuvemshopCallbackController)
   .use(oauthMcpVaultController)
   .use(oauthMcpCallbackController)
   .use(tenantSettingsController)

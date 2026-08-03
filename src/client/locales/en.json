@@ -1093,7 +1093,7 @@
       "slotSpacing": "Slot spacing",
       "slotSpacingHint": "Spacing is the gap between offered start times: 15 min means 09:00 and 09:15 can both be offered.",
       "storeId": "Store ID",
-      "storeIdHint": "The numeric store id from your Nuvemshop/Tiendanube admin URL or the OAuth authorization response (user_id).",
+      "storeIdHint": "Filled in automatically when you connect above, or enter the store's numeric id manually.",
       "tabCalendars": "Calendars",
       "tabReminders": "Reminders",
       "timeZone": "Time zone"
@@ -1126,6 +1126,14 @@
     },
     "loadError": "Could not load this integration.",
     "name": "Name",
+    "nuvemshopConnect": {
+      "authFailed": "Authorization failed: {{message}}",
+      "button": "Connect with Nuvemshop",
+      "connected": "Nuvemshop connected.",
+      "hint": "Opens Nuvemshop/Tiendanube authorization; once approved, the credential and Store ID below are filled in automatically.",
+      "startError": "Could not start the Nuvemshop connection.",
+      "title": "Connect automatically"
+    },
     "saved": "Integration saved.",
     "saveError": "Could not save.",
     "sharedNotice": "This is a shared integration. Changes affect every agent that uses it.",

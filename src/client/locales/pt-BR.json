@@ -1095,7 +1095,7 @@
       "slotSpacing": "Espaçamento dos horários",
       "slotSpacingHint": "O espaçamento é o intervalo entre os horários oferecidos: 15 min significa que 09:00 e 09:15 podem ser oferecidos.",
       "storeId": "ID da loja",
-      "storeIdHint": "O id numérico da loja, encontrado na URL do admin Nuvemshop/Tiendanube ou na resposta da autorização OAuth (user_id).",
+      "storeIdHint": "Preenchido automaticamente ao conectar acima, ou informe manualmente o id numérico da loja.",
       "tabCalendars": "Calendários",
       "tabReminders": "Lembretes",
       "timeZone": "Fuso horário"
@@ -1128,6 +1128,14 @@
     },
     "loadError": "Não foi possível carregar esta integração.",
     "name": "Nome",
+    "nuvemshopConnect": {
+      "authFailed": "Falha na autorização: {{message}}",
+      "button": "Conectar com Nuvemshop",
+      "connected": "Nuvemshop conectada.",
+      "hint": "Abre a autorização da Nuvemshop/Tiendanube; ao aprovar, a credencial e o Store ID abaixo são preenchidos sozinhos.",
+      "startError": "Não foi possível iniciar a conexão com a Nuvemshop.",
+      "title": "Conectar automaticamente"
+    },
     "saved": "Integração salva.",
     "saveError": "Não foi possível salvar.",
     "sharedNotice": "Esta é uma integração compartilhada. Alterações afetam todos os agentes que a usam.",

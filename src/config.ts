@@ -43,6 +43,8 @@ const {
   HUB_UPDATES_TTL_MS,
   AGENT_MODEL_CONCURRENCY,
   DB_POOL_MAX,
+  NUVEMSHOP_CLIENT_ID,
+  NUVEMSHOP_CLIENT_SECRET,
 } = process.env;
 
 // NOTE: Domain entries are trimmed, lowercased, and have a leading "@" stripped
@@ -69,6 +71,12 @@ const parseDomainList = (
 };
 
 const googleClientId = (GOOGLE_CLIENT_ID ?? "").trim();
+// Platform-wide Nuvemshop/Tiendanube Partner App credentials (registered ONCE at
+// partners.tiendanube.com by the operator, reused for every tenant's store connection — unlike
+// Google, a tenant never brings their own client id/secret here). "app id" and "client id" are the
+// same value in Tiendanube's model (see docs/integrations.md's Nuvemshop section).
+const nuvemshopClientId = (NUVEMSHOP_CLIENT_ID ?? "").trim();
+const nuvemshopClientSecret = (NUVEMSHOP_CLIENT_SECRET ?? "").trim();
 
 const config = {
   packageInfo: {
@@ -120,6 +128,9 @@ const config = {
   cdnUrl: CDN_URL ?? "",
   googleClientId,
   googleOAuthEnabled: googleClientId.length > 0,
+  nuvemshopClientId,
+  nuvemshopClientSecret,
+  nuvemshopOAuthEnabled: nuvemshopClientId.length > 0 && nuvemshopClientSecret.length > 0,
   allowedSignupDomains: parseDomainList(
     ALLOWED_SIGNUP_DOMAINS,
     "ALLOWED_SIGNUP_DOMAINS",

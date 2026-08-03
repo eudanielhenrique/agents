@@ -49,6 +49,8 @@
     "mcpTokenNotFound": "Token MCP não encontrado",
     "noExtractableText": "Nenhum texto extraível encontrado neste arquivo",
     "noUpdatableFields": "Nenhum campo atualizável foi informado",
+    "nuvemshopNotConfigured": "A integração com a Nuvemshop não está configurada nesta instância",
+    "nuvemshopTokenExchangeFailed": "Falha ao trocar o código de autorização da Nuvemshop",
     "passwordChangeUnavailable": "Password change is not available for this account",
     "proEdition": "Este recurso requer a edição Pro",
     "providerModelsFailed": "Não foi possível obter a lista de modelos do provedor.",

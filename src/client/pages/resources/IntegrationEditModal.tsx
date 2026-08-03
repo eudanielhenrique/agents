@@ -33,6 +33,7 @@ import {
 import { ServiceLogo } from "@/client/components/icons/ServiceLogo";
 import { api } from "@/client/lib/api";
 import { credentialCompat } from "@/client/lib/credentialCompat";
+import { watchOAuthPopup } from "@/client/lib/oauthPopup";
 import { toolpackToolMeta } from "@/client/lib/toolpackTools";
 
 type CatalogData = Awaited<
@@ -434,6 +435,7 @@ export function IntegrationEditModal({
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [form, setForm] = useState<Form>(emptyForm());
   const [saving, setSaving] = useState(false);
+  const [nuvemshopConnecting, setNuvemshopConnecting] = useState(false);
   const [loadingForm, setLoadingForm] = useState(false);
   const [loadError, setLoadError] = useState(false);
   // Google Calendar: the calendars the connected credential can see (picker source).
@@ -636,6 +638,80 @@ export function IntegrationEditModal({
     setFolderLoaded(false);
     setFolderFilter("");
     syncSlotModes(defaultConfig(c.catalogType));
+  }
+
+  // Nuvemshop self-service connect: pops the Tiendanube authorization page; on success the
+  // BACKEND callback already created the vault credential + the integration instance (config,
+  // credential — nothing left for the operator to type). The success message carries the new
+  // instance id (see oauth-nuvemshop.controller.ts) so onSaved gets the same shape save() gives it.
+  async function handleNuvemshopConnect() {
+    if (!form.name.trim() || nuvemshopConnecting) return;
+    setNuvemshopConnecting(true);
+    try {
+      const { data, error: err } = await api.api.v1.integrations.nuvemshop.connect.post(
+        { name: form.name.trim() },
+      );
+      if (err || !data) {
+        showToast(
+          t(
+            "integrations.nuvemshopConnect.startError",
+            "Could not start the Nuvemshop connection.",
+          ),
+          "error",
+        );
+        setNuvemshopConnecting(false);
+        return;
+      }
+      const popup = window.open(data.url, "nuvemshop-oauth", "width=500,height=700");
+      if (!popup) {
+        showToast(
+          t(
+            "vault.googleOAuth.popupBlocked",
+            "The popup was blocked. Allow popups for this site and try again.",
+          ),
+          "error",
+        );
+        setNuvemshopConnecting(false);
+        return;
+      }
+      const { result } = watchOAuthPopup({
+        channel: "oauth-nuvemshop",
+        messageType: "nuvemshop-oauth",
+      });
+      const outcome = await result;
+      setNuvemshopConnecting(false);
+      if (outcome.type === "error") {
+        showToast(
+          t(
+            "integrations.nuvemshopConnect.authFailed",
+            "Authorization failed: {{message}}",
+            { message: outcome.message ?? "unknown" },
+          ),
+          "error",
+        );
+        return;
+      }
+      if (outcome.type === "success") {
+        showToast(
+          t("integrations.nuvemshopConnect.connected", "Nuvemshop connected."),
+          "success",
+        );
+        modal.close();
+        onSaved?.(
+          { id: outcome.message ?? "", name: form.name.trim() },
+          true,
+        );
+      }
+    } catch {
+      showToast(
+        t(
+          "integrations.nuvemshopConnect.startError",
+          "Could not start the Nuvemshop connection.",
+        ),
+        "error",
+      );
+      setNuvemshopConnecting(false);
+    }
   }
 
   async function save() {
@@ -920,19 +996,49 @@ export function IntegrationEditModal({
             )}
 
             {form.catalogType === "NUVEMSHOP" && (
-              <FormField
-                label={t("integrations.config.storeId", "Store ID")}
-                description={t(
-                  "integrations.config.storeIdHint",
-                  "The numeric store id from your Nuvemshop/Tiendanube admin URL or the OAuth authorization response (user_id).",
+              <>
+                {!editId && (
+                  <div className="flex flex-col gap-3 rounded-lg border border-border bg-bg-tertiary p-4">
+                    <p className="font-medium text-sm text-text-primary">
+                      {t(
+                        "integrations.nuvemshopConnect.title",
+                        "Conectar automaticamente",
+                      )}
+                    </p>
+                    <p className="text-text-muted text-xs">
+                      {t(
+                        "integrations.nuvemshopConnect.hint",
+                        "Abre a autorização da Nuvemshop/Tiendanube; ao aprovar, a credencial e o Store ID abaixo são preenchidos sozinhos.",
+                      )}
+                    </p>
+                    <div className="flex justify-end">
+                      <Button
+                        onClick={handleNuvemshopConnect}
+                        disabled={!form.name.trim() || nuvemshopConnecting}
+                        loading={nuvemshopConnecting}
+                      >
+                        {t(
+                          "integrations.nuvemshopConnect.button",
+                          "Conectar com Nuvemshop",
+                        )}
+                      </Button>
+                    </div>
+                  </div>
                 )}
-              >
-                <Input
-                  value={(cfg.storeId as string) ?? ""}
-                  onChange={(e) => setCfg({ storeId: e.target.value })}
-                  placeholder="123456"
-                />
-              </FormField>
+                <FormField
+                  label={t("integrations.config.storeId", "Store ID")}
+                  description={t(
+                    "integrations.config.storeIdHint",
+                    "Preenchido automaticamente ao conectar acima, ou informe manualmente o id numérico da loja.",
+                  )}
+                >
+                  <Input
+                    value={(cfg.storeId as string) ?? ""}
+                    onChange={(e) => setCfg({ storeId: e.target.value })}
+                    placeholder="123456"
+                  />
+                </FormField>
+              </>
             )}
 
             {form.catalogType === "GOOGLE_CALENDAR" && (
