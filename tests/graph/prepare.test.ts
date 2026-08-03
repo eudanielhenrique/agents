@@ -46,6 +46,7 @@ function makeConfig(
     serviceWindowConfig: SERVICE_WINDOW_DEFAULTS,
     handoffConfig: HANDOFF_DEFAULTS,
     kanbanConfig: KANBAN_DEFAULTS,
+    pixConfig: null,
     toolGuidance: {},
     httpToolContext: {},
     contactName: null,

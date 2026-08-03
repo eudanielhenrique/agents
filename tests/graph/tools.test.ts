@@ -484,6 +484,7 @@ describe("handoff targeting", () => {
         targetAgentId: null,
         targetTeamId: null,
         targetInstanceId: null,
+        whazingQueueId: null,
         instructions: null,
       },
     });
@@ -501,6 +502,7 @@ describe("handoff targeting", () => {
         targetAgentId: 7,
         targetTeamId: null,
         targetInstanceId: null,
+        whazingQueueId: null,
         instructions: null,
       },
     });
@@ -518,6 +520,7 @@ describe("handoff targeting", () => {
         targetAgentId: null,
         targetTeamId: 3,
         targetInstanceId: null,
+        whazingQueueId: null,
         instructions: null,
       },
     });
@@ -538,6 +541,7 @@ describe("handoff targeting", () => {
         targetAgentId: null,
         targetTeamId: null,
         targetInstanceId: null,
+        whazingQueueId: null,
         instructions: null,
       },
     });
@@ -558,6 +562,7 @@ describe("handoff targeting", () => {
         targetAgentId: null,
         targetTeamId: null,
         targetInstanceId: null,
+        whazingQueueId: null,
         instructions: null,
       },
     });
@@ -575,6 +580,7 @@ describe("handoff targeting", () => {
         targetAgentId: null,
         targetTeamId: null,
         targetInstanceId: null,
+        whazingQueueId: null,
         instructions: null,
       },
     });
@@ -594,6 +600,7 @@ describe("handoff targeting", () => {
         targetAgentId: null,
         targetTeamId: null,
         targetInstanceId: null,
+        whazingQueueId: null,
         instructions: null,
       },
       handoffTargets: {
@@ -637,6 +644,7 @@ describe("handoff targeting", () => {
         targetAgentId: null,
         targetTeamId: null,
         targetInstanceId: null,
+        whazingQueueId: null,
         instructions: null,
       },
       handoffTargets: { agents: [{ id: 9, name: "Maria" }], teams: [] },
@@ -655,6 +663,7 @@ describe("handoff targeting", () => {
         targetAgentId: null,
         targetTeamId: null,
         targetInstanceId: null,
+        whazingQueueId: null,
         instructions: null,
       },
       handoffTargets: { agents: [{ id: 9, name: "Maria" }], teams: [] },

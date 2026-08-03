@@ -53,7 +53,7 @@ describe("AgentStatusReporter", () => {
     expect(out[0]?.event).toMatchObject({
       type: "agent-activity",
       tenantId: "7",
-      conversationId: "42",
+      conversationId: "c_42",
       phase: "started",
       stage: "thinking",
       tool: null,

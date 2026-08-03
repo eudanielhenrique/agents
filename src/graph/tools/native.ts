@@ -900,6 +900,19 @@ function getCurrentTimeTool(ctx: ToolCtx) {
   );
 }
 
+// send_button_message/send_list_message/send_carousel_message/send_pix_button/request_payment are
+// WhatsApp interactive-message + PIX capabilities with no Chatwoot equivalent (see
+// src/modules/whazing/tools.ts for the real Whazing implementations). Exposed here as declining
+// stubs rather than omitted, so a Chatwoot-attached agent that somehow has one granted (e.g. the
+// legacy "all tools" default grant) gets a clear, model-visible explanation instead of the tool
+// silently not existing — and so buildNativeTools keeps covering every name in NATIVE_TOOL_NAMES.
+function unsupportedOnChatwootTool(name: string, description: string) {
+  return tool(
+    async () => `${description} Not available on Chatwoot — this is a Whazing-only capability.`,
+    { name, description, schema: z.object({}) },
+  );
+}
+
 // allowed = undefined → all native tools; otherwise only the named subset (fail-closed).
 export function buildNativeTools(
   ctx: ToolCtx,
@@ -918,6 +931,26 @@ export function buildNativeTools(
     skipReplyTool(ctx),
     calculatorTool(ctx),
     getCurrentTimeTool(ctx),
+    unsupportedOnChatwootTool(
+      "send_button_message",
+      "Send up to 3 quick-reply buttons.",
+    ),
+    unsupportedOnChatwootTool(
+      "send_list_message",
+      "Send a scrollable menu of grouped options.",
+    ),
+    unsupportedOnChatwootTool(
+      "send_carousel_message",
+      "Send a horizontally-scrollable carousel of cards.",
+    ),
+    unsupportedOnChatwootTool(
+      "send_pix_button",
+      "Send a 'copy PIX key' button.",
+    ),
+    unsupportedOnChatwootTool(
+      "request_payment",
+      "Send a payment-request card for a specific amount.",
+    ),
   ];
   if (!allowed) return all;
   const allow = new Set(allowed);

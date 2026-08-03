@@ -513,7 +513,8 @@ export function ToolGrantsEditor({
         );
         // Auto-select the first instance if none saved.
         if (!selectedInstanceId && res.data.instances.length === 1) {
-          setSelectedInstanceId(String(res.data.instances[0].id));
+          const first = res.data.instances[0];
+          if (first) setSelectedInstanceId(String(first.id));
         }
       }
     });
