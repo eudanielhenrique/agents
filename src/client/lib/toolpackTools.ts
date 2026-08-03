@@ -9,9 +9,11 @@ import {
   FileSearch,
   Link,
   type LucideIcon,
+  PackageSearch,
   QrCode,
   Receipt,
   Send,
+  ShoppingBag,
   Wrench,
 } from "lucide-react";
 
@@ -32,6 +34,8 @@ export const TOOLPACK_TOOL_ICONS: Record<string, LucideIcon> = {
   calendar_confirm_appointment: CalendarCheck2,
   drive_find_file: FileSearch,
   drive_send_file: Send,
+  nuvemshop_order_lookup: PackageSearch,
+  nuvemshop_product_search: ShoppingBag,
 };
 
 export interface ToolpackToolMeta {
@@ -153,6 +157,27 @@ export function toolpackToolMeta(name: string, t: TFunction): ToolpackToolMeta {
         description: t(
           "toolpackTools.drive_send_file.desc",
           "Send a Drive file to the customer as an attachment.",
+        ),
+      };
+    case "nuvemshop_order_lookup":
+      return {
+        icon,
+        label: t("toolpackTools.nuvemshop_order_lookup.label", "Look up order"),
+        description: t(
+          "toolpackTools.nuvemshop_order_lookup.desc",
+          "Look up orders by number or customer name/email — status, payment, and shipping.",
+        ),
+      };
+    case "nuvemshop_product_search":
+      return {
+        icon,
+        label: t(
+          "toolpackTools.nuvemshop_product_search.label",
+          "Search products",
+        ),
+        description: t(
+          "toolpackTools.nuvemshop_product_search.desc",
+          "Search the store's product catalog by name, tag, or SKU.",
         ),
       };
     default:

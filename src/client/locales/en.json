@@ -286,6 +286,7 @@
     "tokenSaveError": "Could not update the token (check it)."
   },
   "common": {
+    "add": "Add",
     "cancel": "Cancel",
     "clearSearch": "Clear search",
     "close": "Close",
@@ -329,6 +330,7 @@
     "role": "Role",
     "save": "Save",
     "search": "Search",
+    "select": "Select…",
     "showPassword": "Show password"
   },
   "conversation": {
@@ -772,24 +774,9 @@
       "policyDesc": "Competitor list and extra instructions used by the checks.",
       "template": "Template message"
     },
-    "handoffAgentChoice": "Let the AI choose",
-    "handoffAgentChoiceHint": "The AI automatically sees your Chatwoot agents and teams and picks one when handing off. Optionally steer it from the instructions (e.g. send billing questions to Finance).",
-    "handoffAgents": "Agents",
     "handoffInstructions": "Transfer instructions",
     "handoffInstructionsHint": "Optional. Centralizes the transfer logic (when and to whom to escalate). Appended to the handoff tool description the AI reads.",
     "handoffInstructionsPlaceholder": "e.g. Only escalate after two failed attempts. Send billing issues to the Finance team.",
-    "whazingQueueId": "Whazing queue ID",
-    "whazingQueueIdHint": "Whazing queue number to route the ticket to after handoff. Find it in your Whazing dashboard (queue list).",
-    "handoffNone": "Select…",
-    "handoffNoTargets": "No agents or teams found. Connect a Chatwoot instance first.",
-    "handoffPick": "Agent or team",
-    "handoffPickHint": "Loaded from your Chatwoot instance.",
-    "handoffPinned": "A specific agent or team",
-    "handoffPinnedMultiAccount": "This agent serves inboxes in different Chatwoot accounts; use “Let the AI choose”.",
-    "handoffPinnedNoInbox": "Bind at least one inbox in the Channels tab first.",
-    "handoffRoute": "Chatwoot routing (default)",
-    "handoffTarget": "Who receives the handoff",
-    "handoffTeams": "Teams",
     "identitySection": "Identity",
     "identitySectionHint": "Name, system prompt and whether the agent is active.",
     "importWarning": {
@@ -818,6 +805,12 @@
     "kanbanInstructions": "Funnel guidance",
     "kanbanInstructionsHint": "Optional. Explains your funnel and when to move a card between steps. The AI already sees the current step, the available steps, and the card data; this adds your rules. Appended to the kanban tool description.",
     "kanbanInstructionsPlaceholder": "e.g. Move to \"Proposal sent\" only after pricing was shared. Never skip steps.",
+    "kanbanWhazingBoard": "Board",
+    "kanbanWhazingBoardHint": "Choose the Kanban Pro board this agent operates on. Columns will load automatically.",
+    "kanbanWhazingColumns": "Columns",
+    "kanbanWhazingColumnsHint": "These IDs are injected into the agent's kanban tool description so it knows which columnId to use.",
+    "kanbanWhazingConnection": "Whazing connection",
+    "kanbanWhazingConnectionHint": "Select the Whazing instance to load boards from.",
     "knowledge": {
       "bases": "Knowledge bases",
       "createNew": "New",
@@ -847,6 +840,15 @@
     "name": "Name",
     "openPlayground": "Test in playground",
     "overwriteAnyway": "Save anyway",
+    "pixHint": "Used by both 'Send PIX key' and 'Request payment'. The AI never chooses or types this key — only what's configured here is ever sent.",
+    "pixKey": "PIX key",
+    "pixKeyPlaceholder": "ex.: 11.071.697/0001-08",
+    "pixName": "Recipient name",
+    "pixNamePlaceholder": "ex.: Empresa Ltda",
+    "pixType": "Key type",
+    "pixTypeEmail": "E-mail",
+    "pixTypeEvp": "Chave aleatória",
+    "pixTypePhone": "Telefone",
     "proactiveSection": "Proactive messages",
     "proactiveSectionHint": "Reach out first when a conversation goes silent. On WhatsApp, a message sent outside the 24h window needs an approved template (HSM).",
     "promptEditorLabel": "Editor",
@@ -908,8 +910,6 @@
     "systemPrompt": "Agent instructions",
     "tab": {
       "behavior": "Behavior",
-      "channelRedirect": "Redirect",
-      "channels": "Channels",
       "experiments": "A/B",
       "general": "General",
       "guardrails": "Guardrails",
@@ -983,7 +983,9 @@
     "visionPrompt": "Extraction prompt",
     "visionPromptHint": "How the model should read the file.",
     "visionPromptReset": "Restore default",
-    "visionProvider": "Provider"
+    "visionProvider": "Provider",
+    "whazingQueueId": "Whazing queue ID",
+    "whazingQueueIdHint": "Whazing queue number to route the ticket to after handoff. Find it in your Whazing dashboard (queue list)."
   },
   "experiments": {
     "comingSoonDesc": "Run prompt variants side by side and compare outcomes. This feature is under construction.",
@@ -1038,6 +1040,10 @@
       "GOOGLE_DRIVE": {
         "description": "Find a file, get its link, or send it to the customer over a connected Google account.",
         "label": "Google Drive"
+      },
+      "NUVEMSHOP": {
+        "description": "Look up orders and search products in a connected Nuvemshop store.",
+        "label": "Nuvemshop"
       }
     },
     "config": {
@@ -1086,6 +1092,8 @@
       "slotCustom": "Custom…",
       "slotSpacing": "Slot spacing",
       "slotSpacingHint": "Spacing is the gap between offered start times: 15 min means 09:00 and 09:15 can both be offered.",
+      "storeId": "Store ID",
+      "storeIdHint": "The numeric store id from your Nuvemshop/Tiendanube admin URL or the OAuth authorization response (user_id).",
       "tabCalendars": "Calendars",
       "tabReminders": "Reminders",
       "timeZone": "Time zone"
@@ -1452,9 +1460,29 @@
       "desc": "React to the customer's last message with an emoji (WhatsApp reaction).",
       "label": "React with emoji"
     },
+    "request_payment": {
+      "desc": "Send a payment-request card for a specific amount, payable via the configured PIX key.",
+      "label": "Request payment"
+    },
     "resolve_conversation": {
       "desc": "Mark the conversation as resolved when the request is fully handled.",
       "label": "Resolve"
+    },
+    "send_button_message": {
+      "desc": "Send up to 3 quick-reply buttons the customer can tap instead of typing.",
+      "label": "Send buttons"
+    },
+    "send_carousel_message": {
+      "desc": "Send a horizontally-scrollable carousel of cards (image + text + choices) for products or plans.",
+      "label": "Send carousel"
+    },
+    "send_list_message": {
+      "desc": "Send a scrollable menu of grouped options (more than 3 choices, or with descriptions).",
+      "label": "Send list"
+    },
+    "send_pix_button": {
+      "desc": "Send a 'copy PIX key' button with the configured PIX key below.",
+      "label": "Send PIX key"
     },
     "set_custom_attribute": {
       "desc": "Set a custom attribute on the conversation, the contact, or the kanban card (e.g. lead stage, qualification flag).",
@@ -1762,6 +1790,14 @@
     "drive_send_file": {
       "desc": "Send a Drive file to the customer as an attachment.",
       "label": "Send file"
+    },
+    "nuvemshop_order_lookup": {
+      "desc": "Look up orders by number or customer name/email — status, payment, and shipping.",
+      "label": "Look up order"
+    },
+    "nuvemshop_product_search": {
+      "desc": "Search the store's product catalog by name, tag, or SKU.",
+      "label": "Search products"
     }
   },
   "tools": {
@@ -2105,15 +2141,15 @@
     "bound": "Queue updated.",
     "catchAll": "Catch-all queue",
     "copyWebhookUrl": "Copy webhook URL",
+    "created": "Instance created.",
     "createDesc": "Enter your Whazing API credentials. You will receive a webhook URL to paste in the Whazing dashboard.",
     "createError": "Could not create instance.",
     "createTitle": "Add Whazing instance",
-    "created": "Instance created.",
     "deleteQueue": "Remove queue",
     "disconnect": "Disconnect instance",
-    "disconnectError": "Could not disconnect.",
     "disconnected": "Instance disconnected.",
     "disconnectedBadge": "Disconnected",
+    "disconnectError": "Could not disconnect.",
     "editInstance": "Edit instance",
     "editQueue": "Edit queue",
     "editQueueTitle": "Edit queue",
@@ -2136,8 +2172,11 @@
     "queueName": "Display name",
     "queueNameHint": "Optional label for this queue.",
     "queueNamePlaceholder": "Support",
-    "saveError": "Could not update instance.",
+    "reconnect": "Reconnect instance",
+    "reconnected": "Instance reconnected.",
+    "reconnectError": "Could not reconnect.",
     "saved": "Instance updated.",
+    "saveError": "Could not update instance.",
     "subtitle": "Connect Whazing instances and route queues to agents.",
     "title": "Whazing",
     "webhookUrlLabel": "Webhook URL — paste in the Whazing dashboard"

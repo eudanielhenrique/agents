@@ -33,6 +33,15 @@ export const CATALOG: ReadonlyArray<CatalogEntry> = [
     supportsInbound: false,
     defaultInboundAuth: "NONE",
   },
+  {
+    catalogType: "NUVEMSHOP",
+    label: "Nuvemshop",
+    kind: "TOOLPACK",
+    description:
+      "Online store (Nuvemshop/Tiendanube). Outbound toolpack (order lookup by number or customer, product search) over a store access token. Inbound (order paid/shipped webhooks) not yet supported.",
+    supportsInbound: false,
+    defaultInboundAuth: "NONE",
+  },
 ];
 
 const BY_TYPE = new Map(CATALOG.map((e) => [e.catalogType, e]));

@@ -109,6 +109,8 @@ function defaultConfig(catalogType: string): Record<string, unknown> {
       };
     case "GOOGLE_DRIVE":
       return { folderId: "", folderName: "" };
+    case "NUVEMSHOP":
+      return { storeId: "" };
     default:
       return {};
   }
@@ -379,6 +381,8 @@ export function IntegrationEditModal({
         );
       case "GOOGLE_DRIVE":
         return t("integrations.catalog.GOOGLE_DRIVE.label", "Google Drive");
+      case "NUVEMSHOP":
+        return t("integrations.catalog.NUVEMSHOP.label", "Nuvemshop");
       default:
         return c?.label ?? "";
     }
@@ -399,6 +403,11 @@ export function IntegrationEditModal({
         return t(
           "integrations.catalog.GOOGLE_DRIVE.description",
           "Find a file, get its link, or send it to the customer over a connected Google account.",
+        );
+      case "NUVEMSHOP":
+        return t(
+          "integrations.catalog.NUVEMSHOP.description",
+          "Look up orders and search products in a connected Nuvemshop store.",
         );
       default:
         return c?.description ?? "";
@@ -907,6 +916,22 @@ export function IntegrationEditModal({
                     )}
                   </option>
                 </Select>
+              </FormField>
+            )}
+
+            {form.catalogType === "NUVEMSHOP" && (
+              <FormField
+                label={t("integrations.config.storeId", "Store ID")}
+                description={t(
+                  "integrations.config.storeIdHint",
+                  "The numeric store id from your Nuvemshop/Tiendanube admin URL or the OAuth authorization response (user_id).",
+                )}
+              >
+                <Input
+                  value={(cfg.storeId as string) ?? ""}
+                  onChange={(e) => setCfg({ storeId: e.target.value })}
+                  placeholder="123456"
+                />
               </FormField>
             )}
 

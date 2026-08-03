@@ -286,6 +286,7 @@
     "tokenSaveError": "Não foi possível atualizar o token (verifique-o)."
   },
   "common": {
+    "add": "Add",
     "cancel": "Cancelar",
     "clearSearch": "Limpar busca",
     "close": "Fechar",
@@ -329,6 +330,7 @@
     "role": "Função",
     "save": "Salvar",
     "search": "Buscar",
+    "select": "Select…",
     "showPassword": "Mostrar senha"
   },
   "conversation": {
@@ -773,24 +775,9 @@
       "policyDesc": "Lista de concorrentes e instruções extras usadas pelas checagens.",
       "template": "Mensagem template"
     },
-    "handoffAgentChoice": "A IA escolhe",
-    "handoffAgentChoiceHint": "A IA enxerga automaticamente seus agentes e times do Chatwoot e escolhe um ao transferir. Opcionalmente, oriente pela instrução (ex.: mande cobrança para o Financeiro).",
-    "handoffAgents": "Agentes",
     "handoffInstructions": "Instruções de transferência",
     "handoffInstructionsHint": "Opcional. Centraliza a lógica de transferência (quando e para quem escalar). Anexado à descrição da ferramenta de transferência que a IA lê.",
     "handoffInstructionsPlaceholder": "ex.: Só escale após duas tentativas frustradas. Encaminhe questões de cobrança para o time Financeiro.",
-    "whazingQueueId": "ID da fila Whazing",
-    "whazingQueueIdHint": "Número da fila no Whazing para onde o ticket será roteado após a transferência. Encontre na lista de filas do seu painel Whazing.",
-    "handoffNone": "Selecione…",
-    "handoffNoTargets": "Nenhum agente ou time encontrado. Conecte uma instância do Chatwoot primeiro.",
-    "handoffPick": "Agente ou time",
-    "handoffPickHint": "Carregado da sua instância do Chatwoot.",
-    "handoffPinned": "Um agente ou time específico",
-    "handoffPinnedMultiAccount": "Este agente atende caixas em contas diferentes do Chatwoot; use “Deixar a IA escolher”.",
-    "handoffPinnedNoInbox": "Vincule ao menos uma caixa na aba Canais primeiro.",
-    "handoffRoute": "Roteamento do Chatwoot (padrão)",
-    "handoffTarget": "Quem recebe a transferência",
-    "handoffTeams": "Times",
     "identitySection": "Identidade",
     "identitySectionHint": "Nome, prompt do sistema e se o agente está ativo.",
     "importWarning": {
@@ -819,6 +806,12 @@
     "kanbanInstructions": "Guia do funil",
     "kanbanInstructionsHint": "Opcional. Explica seu funil e quando mover um card entre etapas. A IA já vê a etapa atual, as etapas disponíveis e os dados do card; isto acrescenta suas regras. Anexado à descrição da ferramenta de kanban.",
     "kanbanInstructionsPlaceholder": "ex.: Mova para \"Proposta enviada\" só depois de enviar o preço. Nunca pule etapas.",
+    "kanbanWhazingBoard": "Board",
+    "kanbanWhazingBoardHint": "Choose the Kanban Pro board this agent operates on. Columns will load automatically.",
+    "kanbanWhazingColumns": "Columns",
+    "kanbanWhazingColumnsHint": "These IDs are injected into the agent's kanban tool description so it knows which columnId to use.",
+    "kanbanWhazingConnection": "Whazing connection",
+    "kanbanWhazingConnectionHint": "Select the Whazing instance to load boards from.",
     "knowledge": {
       "bases": "Bases de conhecimento",
       "createNew": "Nova",
@@ -848,6 +841,15 @@
     "name": "Nome",
     "openPlayground": "Testar no playground",
     "overwriteAnyway": "Salvar assim mesmo",
+    "pixHint": "Usado tanto por 'Enviar chave PIX' quanto por 'Solicitar pagamento'. A IA nunca escolhe ou digita essa chave — só o que está configurado aqui é enviado.",
+    "pixKey": "Chave PIX",
+    "pixKeyPlaceholder": "ex.: 11.071.697/0001-08",
+    "pixName": "Nome do recebedor",
+    "pixNamePlaceholder": "ex.: Empresa Ltda",
+    "pixType": "Tipo de chave",
+    "pixTypeEmail": "E-mail",
+    "pixTypeEvp": "Chave aleatória",
+    "pixTypePhone": "Telefone",
     "proactiveSection": "Mensagens proativas",
     "proactiveSectionHint": "Aborde o cliente primeiro quando a conversa fica em silêncio. No WhatsApp, uma mensagem enviada fora da janela de 24h exige um template aprovado (HSM).",
     "promptEditorLabel": "Editor",
@@ -909,8 +911,6 @@
     "systemPrompt": "Instruções do agente",
     "tab": {
       "behavior": "Comportamento",
-      "channelRedirect": "Redirecionamento",
-      "channels": "Canais",
       "experiments": "A/B",
       "general": "Geral",
       "guardrails": "Guardrails",
@@ -985,7 +985,9 @@
     "visionPrompt": "Prompt de extração",
     "visionPromptHint": "Como o modelo deve ler o arquivo.",
     "visionPromptReset": "Restaurar padrão",
-    "visionProvider": "Provedor"
+    "visionProvider": "Provedor",
+    "whazingQueueId": "ID da fila Whazing",
+    "whazingQueueIdHint": "Número da fila no Whazing para onde o ticket será roteado após a transferência. Encontre na lista de filas do seu painel Whazing."
   },
   "experiments": {
     "comingSoonDesc": "Rode variantes de prompt lado a lado e compare os resultados. Esta funcionalidade está em construção.",
@@ -1040,6 +1042,10 @@
       "GOOGLE_DRIVE": {
         "description": "Busca um arquivo, obtém o link ou o envia ao cliente, em uma conta Google conectada.",
         "label": "Google Drive"
+      },
+      "NUVEMSHOP": {
+        "description": "Consulte pedidos e busque produtos numa loja Nuvemshop conectada.",
+        "label": "Nuvemshop"
       }
     },
     "config": {
@@ -1088,6 +1094,8 @@
       "slotCustom": "Personalizado…",
       "slotSpacing": "Espaçamento dos horários",
       "slotSpacingHint": "O espaçamento é o intervalo entre os horários oferecidos: 15 min significa que 09:00 e 09:15 podem ser oferecidos.",
+      "storeId": "ID da loja",
+      "storeIdHint": "O id numérico da loja, encontrado na URL do admin Nuvemshop/Tiendanube ou na resposta da autorização OAuth (user_id).",
       "tabCalendars": "Calendários",
       "tabReminders": "Lembretes",
       "timeZone": "Fuso horário"
@@ -1456,9 +1464,29 @@
       "desc": "Reage à última mensagem do cliente com um emoji (reação do WhatsApp).",
       "label": "Reagir com emoji"
     },
+    "request_payment": {
+      "desc": "Envia um cartão de solicitação de pagamento para um valor específico, pagável pela chave PIX configurada.",
+      "label": "Solicitar pagamento"
+    },
     "resolve_conversation": {
       "desc": "Marca a conversa como resolvida quando o pedido foi totalmente atendido.",
       "label": "Resolver"
+    },
+    "send_button_message": {
+      "desc": "Envia até 3 botões de resposta rápida que o cliente pode tocar em vez de digitar.",
+      "label": "Enviar botões"
+    },
+    "send_carousel_message": {
+      "desc": "Envia um carrossel de cartões roláveis (imagem + texto + opções) para produtos ou planos.",
+      "label": "Enviar carrossel"
+    },
+    "send_list_message": {
+      "desc": "Envia um menu rolável de opções agrupadas (mais de 3 opções, ou com descrições).",
+      "label": "Enviar lista"
+    },
+    "send_pix_button": {
+      "desc": "Envia um botão de 'copiar chave PIX' com a chave PIX configurada abaixo.",
+      "label": "Enviar chave PIX"
     },
     "set_custom_attribute": {
       "desc": "Define um atributo personalizado na conversa, no contato ou no card do kanban (ex.: estágio do lead, qualificação).",
@@ -1767,6 +1795,14 @@
     "drive_send_file": {
       "desc": "Envia um arquivo do Drive ao cliente como anexo.",
       "label": "Enviar arquivo"
+    },
+    "nuvemshop_order_lookup": {
+      "desc": "Consulta pedidos por número ou nome/e-mail do cliente — status, pagamento e envio.",
+      "label": "Consultar pedido"
+    },
+    "nuvemshop_product_search": {
+      "desc": "Busca no catálogo de produtos da loja por nome, tag ou SKU.",
+      "label": "Buscar produtos"
     }
   },
   "tools": {
@@ -2110,15 +2146,15 @@
     "bound": "Fila atualizada.",
     "catchAll": "Fila catch-all",
     "copyWebhookUrl": "Copiar URL do webhook",
+    "created": "Instância criada.",
     "createDesc": "Informe os dados da API do Whazing. Você receberá uma URL de webhook para colar no painel do Whazing.",
     "createError": "Não foi possível criar a instância.",
     "createTitle": "Adicionar instância Whazing",
-    "created": "Instância criada.",
     "deleteQueue": "Remover fila",
     "disconnect": "Desconectar instância",
-    "disconnectError": "Não foi possível desconectar.",
     "disconnected": "Instância desconectada.",
     "disconnectedBadge": "Desconectada",
+    "disconnectError": "Não foi possível desconectar.",
     "editInstance": "Editar instância",
     "editQueue": "Editar fila",
     "editQueueTitle": "Editar fila",
@@ -2141,8 +2177,11 @@
     "queueName": "Nome de exibição",
     "queueNameHint": "Rótulo opcional para esta fila.",
     "queueNamePlaceholder": "Suporte",
-    "saveError": "Não foi possível atualizar a instância.",
+    "reconnect": "Reconnect instance",
+    "reconnected": "Instance reconnected.",
+    "reconnectError": "Could not reconnect.",
     "saved": "Instância atualizada.",
+    "saveError": "Não foi possível atualizar a instância.",
     "subtitle": "Conecte instâncias Whazing e roteie filas para agentes.",
     "title": "Whazing",
     "webhookUrlLabel": "URL do webhook — cole no painel do Whazing"
