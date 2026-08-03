@@ -18,6 +18,9 @@ import {
 import {
   getConversationDetail,
   getConversationMessages,
+  getWhazingConversationDetail,
+  getWhazingConversationMessages,
+  parseConvId,
 } from "@/modules/conversations/service";
 import {
   experimentResults,
@@ -723,6 +726,19 @@ export async function metricsTimeseries(
 
 // ── conversations (detail + messages) ──
 
+// Namespaced conversation id: "c_{bigint}" (Chatwoot) or "w_{bigint}" (Whazing) — same scheme the
+// v1 REST API uses (parseConvId). A bad/empty prefix's BigInt parse throws; surfaced as a plain
+// "invalid conversation_id" error like the other asBigInt-validated args in this file.
+function parseConvIdArg(
+  raw: string,
+): { transport: "chatwoot" | "whazing"; id: bigint } | WriteResult {
+  try {
+    return parseConvId(raw);
+  } catch {
+    return err("invalid conversation_id");
+  }
+}
+
 export async function conversationGet(
   principal: VerifiedToken,
   args: { conversation_id: string },
@@ -731,10 +747,14 @@ export async function conversationGet(
   const base = deps.base ?? basePrisma;
   const ctx = readGate(principal);
   if ("ok" in ctx) return ctx;
-  const id = asBigInt(args.conversation_id, "conversation_id");
-  if (typeof id !== "bigint") return id;
+  const parsed = parseConvIdArg(args.conversation_id);
+  if (!("id" in parsed)) return parsed;
   try {
-    return ok({ conversation: await getConversationDetail(ctx, id, base) });
+    const conversation =
+      parsed.transport === "whazing"
+        ? await getWhazingConversationDetail(ctx, parsed.id, base)
+        : await getConversationDetail(ctx, parsed.id, base);
+    return ok({ conversation });
   } catch (e) {
     return failOf(e);
   }
@@ -748,10 +768,14 @@ export async function conversationMessages(
   const base = deps.base ?? basePrisma;
   const ctx = readGate(principal);
   if ("ok" in ctx) return ctx;
-  const id = asBigInt(args.conversation_id, "conversation_id");
-  if (typeof id !== "bigint") return id;
+  const parsed = parseConvIdArg(args.conversation_id);
+  if (!("id" in parsed)) return parsed;
   try {
-    return ok({ ...(await getConversationMessages(ctx, id, {}, base)) });
+    const thread =
+      parsed.transport === "whazing"
+        ? await getWhazingConversationMessages(ctx, parsed.id, base)
+        : await getConversationMessages(ctx, parsed.id, {}, base);
+    return ok({ ...thread });
   } catch (e) {
     return failOf(e);
   }

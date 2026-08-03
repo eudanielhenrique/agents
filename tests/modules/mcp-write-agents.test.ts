@@ -202,6 +202,26 @@ describe.skipIf(!dbUp)("MCP agent-builder tools (DB)", () => {
     expect(audits).toBe(1);
   });
 
+  test("agent_create resolves model_config.credential_ref (snake_case) → credentialRef vault:<id>", async () => {
+    const p = principal({ tenantId: tenantA });
+    const r = await agentCreate(
+      p,
+      {
+        name: "Snake Case Agent",
+        model_config: { provider: "openai", model: "gpt-4o-mini", credential_ref: "my-api" },
+        dry_run: false,
+      },
+      { base: appDb },
+    );
+    expect(r.ok).toBe(true);
+    const row = await suDb.agent.findFirst({
+      where: { tenantId: tenantA, name: "Snake Case Agent" },
+    });
+    const mc = row?.modelConfig as Record<string, unknown> | null;
+    expect(mc?.credentialRef).toBe(`vault:${credId}`);
+    expect(mc?.credential_ref).toBeUndefined();
+  });
+
   test("tool_create resolves credential NAME → vault:<id> on apply", async () => {
     const p = principal({ tenantId: tenantA });
     const r = await toolCreate(

@@ -65,21 +65,26 @@ function parseId(raw: string, label: string): bigint | WriteResult {
 
 // If a free-form config record carries a credentialRef NAME, resolve it to a stable vault:<id> ref
 // (a vault:<id> passes through). Keeps the model-key reference out of the raw-secret path.
+// Accepts credential_ref (snake_case) too — the convention every other credential-bearing MCP write
+// tool uses at its top level — and normalizes it to credentialRef, so a caller following that same
+// convention inside model_config doesn't silently produce an agent with no resolved credential.
 async function resolveConfigCredential(
   ctx: TenantContext,
   config: Record<string, unknown> | undefined,
   base: Parameters<typeof resolveSecretRef>[2],
 ): Promise<{ config?: Record<string, unknown> } | { fail: WriteResult }> {
-  if (
-    !config ||
-    typeof config.credentialRef !== "string" ||
-    !config.credentialRef
-  ) {
-    return { config };
-  }
-  const resolved = await resolveSecretRef(ctx, config.credentialRef, base);
+  if (!config) return { config };
+  const raw =
+    typeof config.credentialRef === "string" && config.credentialRef
+      ? config.credentialRef
+      : typeof config.credential_ref === "string" && config.credential_ref
+        ? config.credential_ref
+        : null;
+  if (!raw) return { config };
+  const resolved = await resolveSecretRef(ctx, raw, base);
   if ("fail" in resolved) return { fail: resolved.fail };
-  return { config: { ...config, credentialRef: resolved.ref } };
+  const { credential_ref: _snakeCase, ...rest } = config;
+  return { config: { ...rest, credentialRef: resolved.ref } };
 }
 
 // ── agents ──

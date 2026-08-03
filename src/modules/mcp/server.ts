@@ -1103,7 +1103,7 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
       "agent_settings_set",
       {
         description:
-          "Patch an agent's BEHAVIOR config. Each block (debounce, stt, tts, split, serviceWindow, grounding, limits) is a PARTIAL patch MERGED into the existing settings (untouched keys preserved) and re-validated/clamped by the runtime readers. Previews a normalized diff and applies NOTHING unless dry_run is false. credentialRef accepts a vault entry NAME or a stable vault:<id> ref (use vault:<id> when multiple entries share the same name). debounce: {enabled,windowSeconds,maxMessagesPerBurst,maxWindowSeconds}. stt: {enabled,provider,model,language,credentialRef,baseURL}. tts: {mode(never|mirror|preference),provider,model,voice,credentialRef,normalize(bool: LLM rewrite of the reply for natural speech before TTS, any language)}. vision: {enabled,provider(openai|gemini|anthropic),model,credentialRef,baseURL,extractionPrompt} — image/document reading at message arrival. split: {enabled,maxChars,typingWpm,minDelayMs,maxDelayMs,maxChunks}. serviceWindow: {enabled,windowHours,templateName,templateLanguage,templateCategory,templateParams,templateContent}. grounding: {maxDistance}. followUp: {enabled,pauseWhileAppointment,steps:[{delayValue,delayUnit(minutes|hours|days),instructions,assignLabels?,resolve?(last step only)}]}. handoff: {mode(route|pinned|agent_choice),targetAgentId?,targetTeamId?,targetInstanceId?,instructions?}. limits: {maxToolCalls(1-50, default 10)}. channelRedirect (WhatsApp→web-chat funnel): {enabled,entryInboxId,widgetInboxId,redirectMessage(with {link}),resendDelayValue,resendDelayUnit(minutes|hours|days),maxResends,openWidget,cloneWaMessage,chatFollowupEnabled,chatFollowupDelayValue,chatFollowupDelayUnit,chatFollowupInstructions,waFollowupEnabled,waFollowupDelayValue,waFollowupDelayUnit,waFollowupMessage(fixed text with {link}, re-sends the redirect link on WhatsApp — NOT AI),closingEnabled,closingDelayValue,closingDelayUnit,closingMessage(fixed goodbye, posted on BOTH chat + WhatsApp — NOT AI)} — the follow-up chain is a timed ladder (chat→whatsapp→closing); widgetInboxId is provisioned via the console (the web widget inbox), not set by hand. (Appointment reminders live on the Calendar integration's config, not here — see integration_update.)",
+          "Patch an agent's BEHAVIOR config. Each block (debounce, stt, tts, split, serviceWindow, grounding, limits) is a PARTIAL patch MERGED into the existing settings (untouched keys preserved) and re-validated/clamped by the runtime readers. Previews a normalized diff and applies NOTHING unless dry_run is false. credentialRef accepts a vault entry NAME or a stable vault:<id> ref (use vault:<id> when multiple entries share the same name). debounce: {enabled,windowSeconds,maxMessagesPerBurst,maxWindowSeconds}. stt: {enabled,provider,model,language,credentialRef,baseURL}. tts: {mode(never|mirror|preference),provider,model,voice,credentialRef,normalize(bool: LLM rewrite of the reply for natural speech before TTS, any language)}. vision: {enabled,provider(openai|gemini|anthropic),model,credentialRef,baseURL,extractionPrompt} — image/document reading at message arrival. split: {enabled,maxChars,typingWpm,minDelayMs,maxDelayMs,maxChunks}. serviceWindow: {enabled,windowHours,templateName,templateLanguage,templateCategory,templateParams,templateContent}. grounding: {maxDistance}. followUp: {enabled,pauseWhileAppointment,steps:[{delayValue,delayUnit(minutes|hours|days),instructions,assignLabels?,resolve?(last step only)}]}. handoff: {mode(route|pinned|agent_choice),targetAgentId?,targetTeamId?,targetInstanceId?,instructions?}. limits: {maxToolCalls(1-50, default 10)}. channelRedirect (WhatsApp→web-chat funnel): {enabled,entryInboxId,widgetInboxId,redirectMessage(with {link}),resendDelayValue,resendDelayUnit(minutes|hours|days),maxResends,openWidget,cloneWaMessage,chatFollowupEnabled,chatFollowupDelayValue,chatFollowupDelayUnit,chatFollowupInstructions,waFollowupEnabled,waFollowupDelayValue,waFollowupDelayUnit,waFollowupMessage(fixed text with {link}, re-sends the redirect link on WhatsApp — NOT AI),closingEnabled,closingDelayValue,closingDelayUnit,closingMessage(fixed goodbye, posted on BOTH chat + WhatsApp — NOT AI)} — the follow-up chain is a timed ladder (chat→whatsapp→closing); widgetInboxId is provisioned via the console (the web widget inbox), not set by hand. (Appointment reminders live on the Calendar integration's config, not here — see integration_update.) guardrails (input/output moderation, off by default): {enabled,provider,model,credentialRef,baseURL,competitors:[names for the competitorMentions check],customPolicy(free text appended to every analysis prompt),input:{enabled,checks:{toxicity,unsafeContent,competitorMentions,promptAdherence},action(template|generated|silent),templateMessage,generationPrompt},output:{...same shape as input}} — provider/model/credentialRef select the DEDICATED guardrails-agent model, separate from the main agent's; credentialRef follows the same vault entry NAME / vault:<id> rule as stt/tts/vision above.",
         inputSchema: {
           agent_id: z.string(),
           debounce: z.record(z.string(), z.unknown()).optional(),
@@ -1117,6 +1117,7 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
           handoff: z.record(z.string(), z.unknown()).optional(),
           limits: z.record(z.string(), z.unknown()).optional(),
           channelRedirect: z.record(z.string(), z.unknown()).optional(),
+          guardrails: z.record(z.string(), z.unknown()).optional(),
           dry_run: z.boolean().optional(),
         },
       },
@@ -1134,6 +1135,7 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
           handoff?: Record<string, unknown>;
           limits?: Record<string, unknown>;
           channelRedirect?: Record<string, unknown>;
+          guardrails?: Record<string, unknown>;
           dry_run?: boolean;
         },
         eff,
@@ -1404,7 +1406,7 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
       "tool_update",
       {
         description:
-          "Update an HTTP tool definition. Previews a diff and applies NOTHING unless dry_run is false. credential_ref accepts a vault entry NAME (null clears it).",
+          "Update an HTTP tool definition. Previews a diff and applies NOTHING unless dry_run is false. credential_ref accepts a vault entry NAME (null clears it). Field names are snake_case ONLY (credential_ref, allowed_hosts, url_template, …) — a camelCase key is silently stripped before this tool ever sees it (MCP schema validation, not a bug you can catch from the diff).",
         inputSchema: {
           tool_id: z.string(),
           name: z.string().optional(),
@@ -1501,7 +1503,7 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
       "mcp_connection_update",
       {
         description:
-          "Update an outbound MCP server connection. Previews a diff and applies NOTHING unless dry_run is false. credential_ref accepts a vault entry NAME (null clears it).",
+          "Update an outbound MCP server connection. Previews a diff and applies NOTHING unless dry_run is false. credential_ref accepts a vault entry NAME (null clears it). Field names are snake_case ONLY — a camelCase key is silently stripped before this tool ever sees it.",
         inputSchema: {
           connection_id: z.string(),
           name: z.string().optional(),
@@ -1665,7 +1667,7 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
       "webhook_update",
       {
         description:
-          "Update an outbound webhook subscription. secret_ref is a vault entry NAME (null clears it). Previews a diff and applies NOTHING unless dry_run is false.",
+          "Update an outbound webhook subscription. secret_ref is a vault entry NAME (null clears it). Previews a diff and applies NOTHING unless dry_run is false. Field names are snake_case ONLY — a camelCase key is silently stripped before this tool ever sees it.",
         inputSchema: {
           webhook_id: z.string(),
           url: z.string().optional(),
@@ -1756,7 +1758,7 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
       "alert_channel_update",
       {
         description:
-          "Update a flow-log alert channel. url_ref rotates the token-bearing URL (vault NAME; never raw, never in the diff). secret_ref is a vault NAME (null clears it). Previews and applies NOTHING unless dry_run is false.",
+          "Update a flow-log alert channel. url_ref rotates the token-bearing URL (vault NAME; never raw, never in the diff). secret_ref is a vault NAME (null clears it). Previews and applies NOTHING unless dry_run is false. Field names are snake_case ONLY — a camelCase key is silently stripped before this tool ever sees it.",
         inputSchema: {
           channel_id: z.string(),
           name: z.string().optional(),
@@ -1842,7 +1844,7 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
       "integration_update",
       {
         description:
-          'Update an integration instance (name, enabled, config, credentials, inbound auth). credential_ref/inbound_secret_ref are vault entry NAMES (null clears). Previews a diff and applies NOTHING unless dry_run is false. The `config` shape depends on catalogType. GOOGLE_CALENDAR: {calendarIds(allowlist of calendar ids the agent may operate on; empty ⇒ ["primary"]), calendarLabels(map of id→friendly name), timeZone(IANA, e.g. America/Sao_Paulo), slotDurationMinutes, slotGranularityMinutes, appointmentReminders:{enabled,offsetsHours(array of hours-before-start, e.g. [24,1]),askConfirmationOnLast}}. GOOGLE_DRIVE: {folderId, folderName}.',
+          'Update an integration instance (name, enabled, config, credentials, inbound auth). credential_ref/inbound_secret_ref are vault entry NAMES (null clears). Previews a diff and applies NOTHING unless dry_run is false. Field names are snake_case ONLY — a camelCase key is silently stripped before this tool ever sees it. The `config` shape depends on catalogType. GOOGLE_CALENDAR: {calendarIds(allowlist of calendar ids the agent may operate on; empty ⇒ ["primary"]), calendarLabels(map of id→friendly name), timeZone(IANA, e.g. America/Sao_Paulo), slotDurationMinutes, slotGranularityMinutes, appointmentReminders:{enabled,offsetsHours(array of hours-before-start, e.g. [24,1]),askConfirmationOnLast}}. GOOGLE_DRIVE: {folderId, folderName}.',
         inputSchema: {
           integration_id: z.string(),
           name: z.string().optional(),

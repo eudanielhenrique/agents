@@ -23,6 +23,7 @@ import {
   getWhazingConversationMessages,
   handoffConversation,
   listConversations,
+  parseConvId,
   replyToConversation,
   returnConversationToAgent,
   setConversationStatus,
@@ -40,16 +41,6 @@ import { getTenant, listTenants, type TenantUpdate } from "./tenants.service";
 function ctxOrThrow(ctx: TenantContext | null): TenantContext {
   if (!ctx) throw new ForbiddenError();
   return ctx;
-}
-
-// Parse a namespaced conversation id. IDs from the API are "c_{bigint}" (Chatwoot) or
-// "w_{bigint}" (Whazing). Legacy bare BigInt strings are treated as Chatwoot for backcompat.
-function parseConvId(
-  raw: string,
-): { transport: "chatwoot" | "whazing"; id: bigint } {
-  if (raw.startsWith("w_")) return { transport: "whazing", id: BigInt(raw.slice(2)) };
-  if (raw.startsWith("c_")) return { transport: "chatwoot", id: BigInt(raw.slice(2)) };
-  return { transport: "chatwoot", id: BigInt(raw) };
 }
 
 // Builds the one-time accept link the operator copies/sends (there is no mailer).

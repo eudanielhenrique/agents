@@ -166,6 +166,18 @@ function buildWhazingConversationsWhere(
   return where;
 }
 
+// Namespaced conversation id → transport + raw row id. `c_{bigint}` (Chatwoot) / `w_{bigint}`
+// (Whazing); a bare numeric id is treated as legacy Chatwoot for back-compat. Single source for
+// every caller that accepts a cross-transport conversation id (v1 REST, MCP read tools) — keep
+// them routing through this instead of re-deriving the prefix scheme.
+export function parseConvId(
+  raw: string,
+): { transport: "chatwoot" | "whazing"; id: bigint } {
+  if (raw.startsWith("w_")) return { transport: "whazing", id: BigInt(raw.slice(2)) };
+  if (raw.startsWith("c_")) return { transport: "chatwoot", id: BigInt(raw.slice(2)) };
+  return { transport: "chatwoot", id: BigInt(raw) };
+}
+
 export async function listConversations(
   ctx: TenantContext,
   filter: ListConversationsFilter,

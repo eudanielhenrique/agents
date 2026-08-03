@@ -54,6 +54,24 @@ Sem o embedding configurado no nível do **tenant** (`tenant_settings`), os docs
 
 O TTS emite Ogg/Opus de propósito; mp3/wav chegariam como arquivo comum, não nota de voz. Se "o áudio chegou como arquivo", o formato é o suspeito.
 
+## MCP write tools
+
+### Update tools (`tool_update`, `mcp_connection_update`, `webhook_update`, `alert_channel_update`, `integration_update`) só aceitam snake_case
+
+O SDK MCP descarta chave desconhecida do input **antes** do handler rodar (zod não-strict, modo "strip"). Passar `credentialRef`/`allowedHosts`/`urlTemplate` em vez de `credential_ref`/`allowed_hosts`/`url_template` não dá erro — a chave simplesmente some. Se só chaves camelCase forem passadas, a tool retorna erro explícito ("no updatable fields provided"); o caso traiçoeiro é **misturar** snake_case válido com uma chave camelCase errada: o diff vem não-vazio, só que sem o campo que você queria mudar. Sempre confira o `diff` do dry-run contra o que você esperava mudar, campo por campo.
+
+### `credential_create` nunca aceita segredo inline (por desenho, não bug)
+
+O schema não tem campo `secret`. Cria a credencial como `pending` e retorna um deeplink (`fillAt`) pro console, onde o operador preenche fora de banda. É proteção deliberada: segredo nunca atravessa uma chamada MCP/LLM.
+
+### `agent_tools_set`: `enabledTools: []` em grant HTTP não é bug
+
+Um `ToolDefinition` (grant HTTP) modela **uma** tool só — não tem sub-tools pra selecionar, então `enabledTools` vazio é o valor correto (a presença do grant já é "habilitado"). Isso é diferente de grants **MCP**/**INTEGRATION**, que expõem múltiplas sub-tools nomeadas e onde `enabledTools` de fato persiste a seleção. Não confundir "grant HTTP" com "grant MCP via transporte HTTP".
+
+### Criação de agente é workflow de 2 passos (por desenho)
+
+`agent_create` não aceita `settings` (stt/tts/split/debounce/handoff/guardrails) inline — só `name`, `system_prompt`, `model_config`, `enabled`, `mode`. Fluxo correto: `agent_create` primeiro, depois `agent_settings_set` pro comportamento. Mudar o prompt depois de criado é sempre via `prompt_set`, nunca `agent_update` (o campo nem existe no schema de `agent_update` — passar `system_prompt` lá é descartado silenciosamente pelo mesmo motivo do parágrafo acima).
+
 ## Mutação
 
 ### Write direto no DB pode quebrar no próximo restart

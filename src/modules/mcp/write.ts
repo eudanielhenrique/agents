@@ -489,9 +489,10 @@ export async function agentSettingsSet(
   if (args.limits !== undefined) patch.limits = args.limits;
   if (args.channelRedirect !== undefined)
     patch.channelRedirect = args.channelRedirect;
+  if (args.guardrails !== undefined) patch.guardrails = args.guardrails;
   if (Object.keys(patch).length === 0) {
     return err(
-      "no updatable fields provided (debounce, stt, tts, vision, split, serviceWindow, followUp, handoff, limits, channelRedirect and/or grounding)",
+      "no updatable fields provided (debounce, stt, tts, vision, split, serviceWindow, followUp, handoff, limits, channelRedirect, guardrails and/or grounding)",
     );
   }
 
@@ -500,7 +501,7 @@ export async function agentSettingsSet(
     // A `vault:<id>` ref is validated directly; a plain name goes through resolveVaultRefByName
     // so ambiguity (multiple kinds sharing the same name) surfaces as an explicit error rather
     // than a silent wrong-entry selection.
-    for (const key of ["stt", "tts", "vision"] as const) {
+    for (const key of ["stt", "tts", "vision", "guardrails"] as const) {
       const block = patch[key];
       if (
         block &&
