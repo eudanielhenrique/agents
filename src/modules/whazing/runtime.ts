@@ -2,10 +2,6 @@ import { HumanMessage } from "@langchain/core/messages";
 import type { PrismaClient } from "@/../generated/prisma/client";
 import logger from "@/api/lib/logger";
 import basePrisma from "@/api/lib/prisma";
-import { runScopedOn, type TenantContext } from "@/lib/tenancy";
-import type { ChatwootClient } from "@/modules/chatwoot/client";
-import { emitFlowEvent, type FlowContext } from "@/modules/flowlog/service";
-import { deliverReply } from "@/modules/split/service";
 import { getCheckpointer } from "@/graph/checkpointer";
 import { lastAssistantText } from "@/graph/graph";
 import { clearTurnInFlight, markTurnInFlight } from "@/graph/inflight";
@@ -17,12 +13,15 @@ import {
   type ToolBuildDeps,
 } from "@/graph/prepare";
 import type { RunAgentTurnOutcome } from "@/graph/runtime";
-import { Langfuse } from "langfuse-langchain";
-import { resolveLangfuseConfig, type LangfuseConfig } from "@/graph/observability";
-import { resolveWhazingGraphThreadId } from "./thread-keys";
+import { runScopedOn, type TenantContext } from "@/lib/tenancy";
+import type { ChatwootClient } from "@/modules/chatwoot/client";
+import { emitFlowEvent, type FlowContext } from "@/modules/flowlog/service";
+import { deliverReply } from "@/modules/split/service";
+import { looksLikePersonName } from "@/modules/whazing/contact-name";
 import { loadWhazingClient } from "./instance";
 import { resolveWhazingSttConfig, transcribeWhazingAudio } from "./media";
 import { renderWhazingMessage } from "./render";
+import { resolveWhazingGraphThreadId } from "./thread-keys";
 import { buildWhazingNativeTools } from "./tools";
 import type { NormalizedWhazingEvent } from "./types";
 
@@ -44,9 +43,9 @@ async function upsertWhazingConversation(
   },
 ): Promise<bigint> {
   const now = new Date();
-  const status = params.status === "closed" ? "resolved" : (params.status ?? "open");
+  const status =
+    params.status === "closed" ? "resolved" : (params.status ?? "open");
   const row = await runScopedOn(base, ctx, (db) =>
-    // @ts-ignore — WhazingConversation added to schema; types regenerate at build time
     db.whazingConversation.upsert({
       where: {
         tenantId_instanceId_ticketId: {
@@ -86,104 +85,14 @@ async function upsertWhazingConversation(
   return row.id as bigint;
 }
 
-// Sync the full conversation history from the Whazing ticket into Langfuse.
-// This creates/updates a trace with all messages (customer + agent) so the
-// Langfuse UI shows the complete conversation context, not just the current turn.
-async function syncWhazingHistoryToLangfuse(
-  client: { getTicket: (ticketId: number) => Promise<unknown> },
-  ticketId: number,
-  traceId: string,
-  contactName: string | null | undefined,
-  base: PrismaClient,
-  tenantId: bigint,
-): Promise<void> {
-  try {
-    // Resolve the tenant's Langfuse config from the vault
-    const cfg = await runScopedOn(base, { tenantId, userId: null, role: "TENANT_ADMIN" }, (db) =>
-      resolveLangfuseConfig(db, tenantId),
-    );
-    if (!cfg) return;
-
-    // Create a Langfuse client (cached per tenant+config via the SDK's internal cache)
-    const lf = new Langfuse({
-      publicKey: cfg.publicKey,
-      secretKey: cfg.secretKey,
-      baseUrl: cfg.baseUrl,
-    });
-
-    const ticket = await client.getTicket(ticketId).catch(() => null);
-    if (!ticket || typeof ticket !== "object") return;
-
-    const t = ticket as Record<string, unknown>;
-    const messages = (t.messages ?? t.data?.messages ?? []) as Array<{
-      body?: string;
-      messageBody?: string;
-      fromMe?: boolean;
-      sendType?: string;
-      createdAt?: string;
-      updatedAt?: string;
-      id?: number;
-    }>;
-
-    if (!Array.isArray(messages) || messages.length === 0) return;
-
-    // Build the conversation history as alternating user/assistant messages.
-    const history: Array<{ role: "user" | "assistant"; content: string }> = [];
-    for (const msg of messages) {
-      const text = msg.body ?? msg.messageBody ?? "";
-      if (!text) continue;
-      // fromMe=true → agent reply; fromMe=false → customer message
-      const role = msg.fromMe ? "assistant" : "user";
-      history.push({ role, content: text });
-    }
-
-    if (history.length === 0) return;
-
-    // Create/update the Langfuse trace with the full history.
-    const firstUserMsg = history.find((m) => m.role === "user");
-    const lastAgentMsg = [...history].reverse().find((m) => m.role === "assistant");
-
-    const trace = lf.trace({
-      id: traceId,
-      name: "Whazing Conversation",
-      sessionId: `whazing-ticket-${ticketId}`,
-      userId: cfg.tenantSlug,
-      metadata: {
-        ticketId,
-        contactName: contactName ?? null,
-        messageCount: history.length,
-        source: "whazing",
-        tenantId: String(tenantId),
-      },
-      input: firstUserMsg?.content ?? "",
-      output: lastAgentMsg?.content ?? "",
-    });
-
-    // Add each message as an observation for full drill-down
-    for (let i = 0; i < history.length; i++) {
-      const msg = history[i];
-      trace?.event({
-        id: `msg-${i}`,
-        name: msg.role === "user" ? "Customer Message" : "Agent Reply",
-        input: msg.role === "user" ? msg.content : undefined,
-        output: msg.role === "assistant" ? msg.content : undefined,
-      });
-    }
-  } catch (err) {
-    logger.warn(
-      "whazing langfuse history sync failed (non-fatal): %s",
-      err instanceof Error ? err.message : String(err),
-    );
-  }
-}
-
 // Whazing agent runtime. Parallel to runAgentTurn in src/graph/runtime.ts but transport-aware:
 // uses WhazingClient instead of ChatwootClient, resolves the inbox via WhazingInbox (not
 // Chatwoot Inbox), and injects Whazing-native tools (handoff/close/note — see tools.ts).
 //
-// loadAgentConfig is still called with instanceId=0 and conversationId=ticketId. The chatwoot
-// conv query returns null (no such row), so contact/inbox prompt vars are empty for now — a
-// known MVP limitation documented as TODO.
+// loadAgentConfig is still called with instanceId=0 and conversationId=ticketId (the chatwoot
+// conv query returns null — no such row), so most contact/inbox prompt vars stay empty. The one
+// exception is {{nome_contato}}: injected below via a promptVars override from the real WhatsApp
+// profile name, when it looks like an actual person's name (see contact-name.ts).
 
 function sysCtx(tenantId: bigint): TenantContext {
   return { tenantId, userId: null, role: "TENANT_ADMIN" };
@@ -224,27 +133,35 @@ export async function runWhazingAgentTurn(
   if (!inbox?.agentId) return "no-agent";
   const agentId = inbox.agentId;
 
-  const threadId = resolveWhazingGraphThreadId(
-    tenantId,
-    instanceId,
-    {
-      whatsappId: event.contact?.whatsappId ?? undefined,
-      contactId: event.contact?.id != null ? String(event.contact.id) : undefined,
-      ticketId,
-    },
-  );
+  const threadId = resolveWhazingGraphThreadId(tenantId, instanceId, {
+    whatsappId: event.contact?.whatsappId ?? undefined,
+    contactId: event.contact?.id ?? undefined,
+    ticketId,
+  });
 
   // Load agent config. instanceId=0 prevents accidental matches in Chatwoot tables;
-  // conversationId=ticketId is a no-match placeholder — conv will be null.
-  // TODO: populate contact/inbox prompt vars from WhazingConversation once wired.
+  // conversationId=ticketId is a no-match placeholder — conv will be null, so contact/inbox prompt
+  // vars would normally resolve empty (see loadAgentConfig). We DO have the real WhatsApp profile
+  // name from the webhook event, so inject it as a promptVars override (the same mechanism the
+  // playground uses to simulate {{nome_contato}}) — but only when it looks like an actual person's
+  // name, not a WhatsApp handle/emoji (see contact-name.ts). A messy/absent name is left unset so
+  // the agent's own prompt instructions decide whether to ask for it.
+  const rawContactName = event.contact?.name ?? null;
+  const promptVars = looksLikePersonName(rawContactName)
+    ? { nome_contato: rawContactName as string }
+    : undefined;
   const loaded = await runScopedOn(base, sysCtx(tenantId), (db) =>
-    loadAgentConfig(db, {
-      tenantId,
-      instanceId: BigInt(0),
-      conversationId: ticketId,
-      agentId,
-      threadId,
-    }),
+    loadAgentConfig(
+      db,
+      {
+        tenantId,
+        instanceId: BigInt(0),
+        conversationId: ticketId,
+        agentId,
+        threadId,
+      },
+      { overrides: promptVars ? { promptVars } : undefined },
+    ),
   );
   if (!loaded) return "no-agent";
 
@@ -265,7 +182,10 @@ export async function runWhazingAgentTurn(
       contactName: event.contact?.name ?? null,
     },
   ).catch((e) => {
-    logger.warn("whazing conv upsert failed (non-fatal): %s", e instanceof Error ? e.message : String(e));
+    logger.warn(
+      "whazing conv upsert failed (non-fatal): %s",
+      e instanceof Error ? e.message : String(e),
+    );
     return null;
   });
 
@@ -281,20 +201,6 @@ export async function runWhazingAgentTurn(
   };
 
   const client = await loadWhazingClient(tenantId, instanceId, base);
-
-  // Sync the full conversation history from Whazing into Langfuse so the
-  // trace shows the complete conversation, not just the current turn.
-  // Best-effort — never blocks the agent turn.
-  if (whazingConvId) {
-    syncWhazingHistoryToLangfuse(
-      client,
-      ticketId,
-      `whazing-conv-${whazingConvId}`,
-      event.contact?.name,
-      base,
-      tenantId,
-    ).catch(() => {});
-  }
 
   // Attempt STT for the first audio attachment (best-effort — never strands the delivery).
   let transcription: string | null = null;
@@ -403,7 +309,14 @@ export async function runWhazingAgentTurn(
       }
     }
 
-    await deliverReply(client, ticketId, reply, loaded.splitConfig, undefined, flow);
+    await deliverReply(
+      client,
+      ticketId,
+      reply,
+      loaded.splitConfig,
+      undefined,
+      flow,
+    );
     logger.info(
       "whazing agent replied: ticket=%s thread=%s len=%d",
       String(ticketId),
@@ -416,7 +329,6 @@ export async function runWhazingAgentTurn(
     if (whazingConvId) {
       const msg = err instanceof Error ? err.message : String(err);
       runScopedOn(base, sysCtx(tenantId), (db) =>
-        // @ts-ignore
         db.whazingConversation.update({
           where: { id: whazingConvId },
           data: { lastError: msg.slice(0, 500), lastErrorAt: new Date() },

@@ -164,6 +164,25 @@ describe("normalizeWhazingEvent", () => {
     expect(ev?.status).toBeNull();
   });
 
+  test("ignores channel lifecycle events (Type field) even with a populated messageBody", () => {
+    // Real payload shape per Whazing's channel webhook docs: TransferTicket/NewTicket/ClosedTicket/
+    // NewTicketUserCreate carry `Type` + `messageBody` but no `messageId` — without the `Type` guard
+    // this would be misread as a real incoming customer message.
+    const transfer = normalizeWhazingEvent({
+      Type: "TransferTicket",
+      messageBody: "Ticket transferido para fila IA",
+      ticket: { id: 1, status: "pending", queueId: 14 },
+    });
+    expect(transfer).toBeNull();
+
+    const newTicket = normalizeWhazingEvent({
+      Type: "NewTicket",
+      messageBody: "Primeira mensagem do cliente",
+      ticket: { id: 2, status: "pending", queueId: 39 },
+    });
+    expect(newTicket).toBeNull();
+  });
+
   test("normalizes attachments array", () => {
     const ev = normalizeWhazingEvent({
       event: "message_received",
@@ -177,8 +196,8 @@ describe("normalizeWhazingEvent", () => {
       },
     });
     expect(ev?.message?.attachments).toHaveLength(1);
-    expect(ev?.message?.attachments[0].mediaType).toBe("audio");
-    expect(ev?.message?.attachments[0].mediaUrl).toBe("https://cdn.whazing.com/audio.ogg");
+    expect(ev?.message?.attachments[0]?.mediaType).toBe("audio");
+    expect(ev?.message?.attachments[0]?.mediaUrl).toBe("https://cdn.whazing.com/audio.ogg");
   });
 });
 

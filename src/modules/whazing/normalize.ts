@@ -89,9 +89,15 @@ export function normalizeWhazingEvent(
 
   // Shape (A): explicit event field.
   // Shape (B): Whazing flat payload — infer "message_received" from presence of messageId/messageBody.
+  // The channel webhook also delivers ticket-lifecycle events (NewTicket, TransferTicket, ClosedTicket,
+  // NewTicketUserCreate) as flat payloads carrying their own `Type` + a `messageBody` (e.g. a transfer
+  // note) but NO `messageId` — without excluding them here, a non-empty messageBody would make one look
+  // like a real incoming message. Real message payloads never carry `Type` (see Whazing's webhook docs),
+  // so its presence is the reliable discriminator.
   let event = str(r.event);
   if (!event) {
-    if (r.messageId != null || r.messageBody != null) {
+    const isLifecycleEvent = str(r.Type) != null;
+    if (!isLifecycleEvent && (r.messageId != null || r.messageBody != null)) {
       event = "message_received";
     } else {
       return null;
