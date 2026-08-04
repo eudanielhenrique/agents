@@ -28,6 +28,11 @@ services:
       # mints the client and the metadata then publishes `registration_endpoint`. The app code default
       # is OFF (closed/hardened, see docs/mcp.md); this agent-operated deploy turns it ON deliberately.
       - MCP_DCR_ENABLED=true
+      # Optional: platform-wide Nuvemshop/Tiendanube Partner App credentials for the self-service
+      # integration connect flow (see docs/integrations.md). Leave unset to disable; operators can
+      # still connect a store manually via the vault.
+      - NUVEMSHOP_CLIENT_ID=${NUVEMSHOP_CLIENT_ID:-}
+      - NUVEMSHOP_CLIENT_SECRET=${NUVEMSHOP_CLIENT_SECRET:-}
       # Persist uploaded branding (logo/favicon) + generated quote PDFs on the `storage` volume.
       # The defaults (./data/*) live on the ephemeral container FS and vanish on every redeploy.
       - BRANDING_STORAGE_DIR=/app/storage/branding

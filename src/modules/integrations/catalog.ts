@@ -33,15 +33,11 @@ export const CATALOG: ReadonlyArray<CatalogEntry> = [
     supportsInbound: false,
     defaultInboundAuth: "NONE",
   },
-  {
-    catalogType: "NUVEMSHOP",
-    label: "Nuvemshop",
-    kind: "TOOLPACK",
-    description:
-      "Online store (Nuvemshop/Tiendanube). Outbound toolpack (order lookup by number or customer, product search) over a store access token. Inbound (order paid/shipped webhooks) not yet supported.",
-    supportsInbound: false,
-    defaultInboundAuth: "NONE",
-  },
+  // NOTE: Nuvemshop (NUVEMSHOP) is implemented (src/modules/integrations/toolpacks/nuvemshop.ts,
+  // the OAuth connect flow in nuvemshop-oauth.ts/oauth-nuvemshop.controller.ts) but pulled from
+  // the catalog on standby — the Partner App redirect URL / multi-store OAuth flow needs sorting
+  // out on the Nuvemshop side before offering this to operators. Re-add the catalog entry to
+  // resume (nothing else needs to change).
 ];
 
 const BY_TYPE = new Map(CATALOG.map((e) => [e.catalogType, e]));
