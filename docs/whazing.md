@@ -10,7 +10,6 @@ Whazing (WhatsApp gateway)
   │                     ack <5s, process async
   └── API (Bearer key)
         ├── POST /api/messages/sendText    ← sendMessage
-        ├── POST /tickets/:id/notes        ← sendPrivateNote
         ├── POST /messages/sendAudio       ← sendAudioMessage (multipart)
         ├── GET  /tickets/:id              ← getTicket (gate re-check)
         ├── PUT  /tickets/:id              ← assignTicketToQueue / closeTicket
@@ -23,7 +22,7 @@ Whazing (WhatsApp gateway)
 
 Key methods:
 - `sendMessage(ticketId, text)` — POST `/api/messages/sendText`
-- `sendPrivateNote(ticketId, text)` — POST `/api/tickets/:id/notes` with `private: true` (endpoint shape is a spike TODO — confirm against live Whazing; see issue #14)
+- `sendPrivateNote(ticketId, text)` — **no-op.** Whazing has no internal-note API; an earlier version aliased this to `sendMessage`, which sent LLM-internal handoff summaries (occasionally containing patient health details) straight to the customer's WhatsApp thread — a real production incident (2026-08-04, tickets 10345/10348/10354). Until Whazing ships a real internal-note endpoint, the note text is dropped. The `handoff_to_human` tool's queue assignment is the actual signal to staff — they read the transcript themselves for context.
 - `sendAudioMessage(ticketId, audio, fileName, mime, opts?)` — multipart POST `/api/messages/sendAudio`
 - `toggleTyping(_ticketId, _on)` — no-op (Whazing has no typing indicator API)
 - `getTicket(ticketId)` — GET `/api/tickets/:id`
@@ -33,7 +32,7 @@ Key methods:
 
 `WhazingApiError` carries `status` + `endpoint` and **never** the response body (PII).
 
-**NOTE**: endpoint shapes for `sendPrivateNote` and `sendAudioMessage` are tentative — verify against a live Whazing instance before production. The spike (issue #14) should confirm the actual paths. Update `client.ts` and mark the TODO comments resolved once confirmed.
+**NOTE**: the endpoint shape for `sendAudioMessage` is tentative — verify against a live Whazing instance before production.
 
 ## Instance model and provisioning (`src/modules/whazing/management.ts`)
 
@@ -148,7 +147,8 @@ Chatwoot-specific tools (`set_custom_attribute`, `assign_label`, `kanban_*`, `se
 
 ## MVP limitations and known TODOs
 
-- `sendPrivateNote` and `sendAudioMessage` endpoints are tentative — verify against a live instance (issue #14).
+- `sendAudioMessage` endpoint shape is tentative — verify against a live instance.
+- `sendPrivateNote` is a permanent no-op (see client method docs above) — Whazing has no internal-note API, and there is no operator-visible fallback for handoff reasons or `private_note` content today.
 - `loadAgentConfig` with `instanceId: BigInt(0)` means contact/inbox prompt variables are empty. A dedicated `WhazingConversation` row would fix this.
 - Media ingestion: STT for voice notes is wired (`renderWhazingMessage` + `transcribeWhazingAudio` in `src/modules/whazing/render.ts` + `media.ts`). Vision (image description) is not yet implemented.
 - A PROCESSING→PENDING reaper (stranded delivery recovery) is not yet implemented.

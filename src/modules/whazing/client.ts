@@ -128,9 +128,13 @@ export class WhazingClient implements InboxReplyClient {
     });
   }
 
-  // Whazing has no native private-note concept — send as a regular message.
-  sendPrivateNote(ticketId: number, text: string): Promise<unknown> {
-    return this.sendMessage(ticketId, text);
+  // Whazing has no native private-note concept. Previously this fell back to sendMessage,
+  // which leaked LLM-internal summaries (sometimes including patient health details) straight
+  // to the customer's WhatsApp thread. Until Whazing ships a real internal-note endpoint, the
+  // note is dropped rather than sent anywhere — the queue assignment in handoff_to_human is
+  // the actual signal to staff; they can read the transcript themselves for context.
+  sendPrivateNote(_ticketId: number, _text: string): Promise<unknown> {
+    return Promise.resolve(null);
   }
 
   async sendAudioMessage(
