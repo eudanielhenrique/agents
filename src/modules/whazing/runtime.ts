@@ -13,6 +13,7 @@ import {
   type ToolBuildDeps,
 } from "@/graph/prepare";
 import type { RunAgentTurnOutcome } from "@/graph/runtime";
+import { AppError } from "@/lib/errors";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
 import type { ChatwootClient } from "@/modules/chatwoot/client";
 import { emitFlowEvent, type FlowContext } from "@/modules/flowlog/service";
@@ -42,6 +43,8 @@ async function upsertWhazingConversation(
     contactName: string | null;
   },
 ): Promise<bigint> {
+  if (ctx.tenantId === null) throw new AppError("tenant required", 400);
+  const tenantId = ctx.tenantId;
   const now = new Date();
   const status =
     params.status === "closed" ? "resolved" : (params.status ?? "open");
@@ -49,13 +52,13 @@ async function upsertWhazingConversation(
     db.whazingConversation.upsert({
       where: {
         tenantId_instanceId_ticketId: {
-          tenantId: ctx.tenantId!,
+          tenantId,
           instanceId: params.instanceId,
           ticketId: params.ticketId,
         },
       },
       create: {
-        tenantId: ctx.tenantId!,
+        tenantId,
         instanceId: params.instanceId,
         inboxId: params.inboxId,
         ticketId: params.ticketId,
@@ -188,6 +191,11 @@ export async function runWhazingAgentTurn(
     );
     return null;
   });
+  // loadAgentConfig only ever looks up the Chatwoot Conversation table, so conversationDbId came
+  // back null above. Point it at the Whazing mirror row now so LlmUsage/Langfuse attribute this
+  // turn to a real conversation instead of dropping it (the dashboard's "conversations" figures
+  // count DISTINCT LlmUsage.conversationId, so a null here means Whazing turns never show up).
+  if (whazingConvId != null) loaded.conversationDbId = whazingConvId;
 
   const flow: FlowContext = {
     tenantId,

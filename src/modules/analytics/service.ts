@@ -159,10 +159,33 @@ export async function getInstanceMetrics(
       for (const ib of inboxes) inboxNames.set(String(ib.id), ib.name);
     }
 
-    const byStatus = await db.conversation.groupBy({
+    const chatwootByStatus = await db.conversation.groupBy({
       by: ["status"],
       _count: { _all: true },
     });
+    // Whazing conversations live in a separate mirror table (no Chatwoot Conversation row is ever
+    // created for them) — without this, a Whazing-only tenant's conversation count is always 0.
+    const whazingByStatus = await db.whazingConversation.groupBy({
+      by: ["status"],
+      _count: { _all: true },
+    });
+    const byStatusMap = new Map<string, number>();
+    for (const s of chatwootByStatus) {
+      byStatusMap.set(
+        s.status,
+        (byStatusMap.get(s.status) ?? 0) + s._count._all,
+      );
+    }
+    for (const s of whazingByStatus) {
+      byStatusMap.set(
+        s.status,
+        (byStatusMap.get(s.status) ?? 0) + s._count._all,
+      );
+    }
+    const byStatus = Array.from(byStatusMap, ([status, count]) => ({
+      status,
+      _count: { _all: count },
+    }));
 
     const convTotal = byStatus.reduce((acc, s) => acc + s._count._all, 0);
 
@@ -235,9 +258,15 @@ export async function getKpis(
   base: PrismaClient = basePrisma,
 ): Promise<DashboardKpis> {
   return runScopedOn(base, ctx, async (db) => {
-    const totalConversations = await db.conversation.count({
-      where: filter.since ? { createdAt: { gte: filter.since } } : {},
-    });
+    const sinceFilter = filter.since
+      ? { createdAt: { gte: filter.since } }
+      : {};
+    // Involved/resolvedByBot/handoff below stay Chatwoot-only (they key off Conversation.status
+    // and .assigneeType, which have no Whazing equivalent yet) — only the raw total is unioned so
+    // the top "Conversations" KPI reflects Whazing-only tenants too.
+    const totalConversations =
+      (await db.conversation.count({ where: sinceFilter })) +
+      (await db.whazingConversation.count({ where: sinceFilter }));
     const involvedRows = await db.llmUsage.findMany({
       where: {
         // KPIs are always about real customer conversations: playground turns never create a
