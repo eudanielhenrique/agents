@@ -261,9 +261,6 @@ export async function getKpis(
     const sinceFilter = filter.since
       ? { createdAt: { gte: filter.since } }
       : {};
-    // Involved/resolvedByBot/handoff below stay Chatwoot-only (they key off Conversation.status
-    // and .assigneeType, which have no Whazing equivalent yet) — only the raw total is unioned so
-    // the top "Conversations" KPI reflects Whazing-only tenants too.
     const totalConversations =
       (await db.conversation.count({ where: sinceFilter })) +
       (await db.whazingConversation.count({ where: sinceFilter }));
@@ -275,22 +272,48 @@ export async function getKpis(
         source: "inbox",
         ...(filter.since ? { createdAt: { gte: filter.since } } : {}),
       },
-      select: { conversationId: true },
+      select: { conversationId: true, threadId: true },
       distinct: ["conversationId"],
     });
-    const involvedIds = involvedRows
-      .map((r) => r.conversationId)
-      .filter((x): x is bigint => x !== null);
-    const involved = involvedIds.length;
+    // conversationId is a soft (non-FK) reference into EITHER Conversation (Chatwoot) or
+    // WhazingConversation — both are independent autoincrement id spaces, so a numeric id alone
+    // can't tell them apart (id 21 plausibly exists in both tables). Every Whazing thread id is
+    // built by resolveWhazingGraphThreadId as "tenant:<id>:whazing:...", which Chatwoot's plain
+    // "<tenantId>:<instanceId>:<conversationId>" never produces — using that prefix to split the
+    // id list is the same disambiguation buildConversationsWhere/parseConvId use for the
+    // Conversations list page, just keyed off the thread id instead of a w_/c_ string prefix.
+    const chatwootInvolvedIds: bigint[] = [];
+    const whazingInvolvedIds: bigint[] = [];
+    for (const r of involvedRows) {
+      if (r.conversationId == null) continue;
+      const isWhazing = r.threadId?.startsWith(
+        `tenant:${ctx.tenantId}:whazing:`,
+      );
+      (isWhazing ? whazingInvolvedIds : chatwootInvolvedIds).push(
+        r.conversationId,
+      );
+    }
+    const involved = chatwootInvolvedIds.length + whazingInvolvedIds.length;
     let resolvedByBot = 0;
     let handoff = 0;
-    if (involved > 0) {
+    if (chatwootInvolvedIds.length > 0) {
       const convs = await db.conversation.findMany({
-        where: { id: { in: involvedIds } },
+        where: { id: { in: chatwootInvolvedIds } },
         select: { status: true, assigneeType: true },
       });
       for (const c of convs) {
         if (c.assigneeType === "User") handoff += 1;
+        else if (c.status === "resolved") resolvedByBot += 1;
+      }
+    }
+    if (whazingInvolvedIds.length > 0) {
+      const convs = await db.whazingConversation.findMany({
+        where: { id: { in: whazingInvolvedIds } },
+        select: { status: true, assignedUserId: true },
+      });
+      for (const c of convs) {
+        // assignedUserId != null: a human took over (mirrors Chatwoot's assigneeType === "User").
+        if (c.assignedUserId != null) handoff += 1;
         else if (c.status === "resolved") resolvedByBot += 1;
       }
     }
