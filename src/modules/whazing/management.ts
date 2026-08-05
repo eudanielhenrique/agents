@@ -1,7 +1,7 @@
 import type { PrismaClient } from "@/../generated/prisma/client";
 import { decryptJson, encryptJson } from "@/api/lib/crypto";
 import basePrisma from "@/api/lib/prisma";
-import { NotFoundError } from "@/lib/errors";
+import { AppError, NotFoundError } from "@/lib/errors";
 import { assertSafeOutboundUrl } from "@/lib/ssrf";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
 import { generateRouteToken } from "@/modules/webhooks/inbound/route-token";
@@ -127,11 +127,14 @@ export async function createWhazingInstance(
   input: CreateWhazingInstanceInput,
   db: PrismaClient = basePrisma,
 ): Promise<WhazingInstanceDto> {
+  if (ctx.tenantId === null) throw new AppError("tenant required", 400);
+  const tenantId = ctx.tenantId;
   await assertSafeOutboundUrl(input.baseUrl, { allowHttp: true });
   const { token, hash } = generateRouteToken();
   const row = await runScopedOn(db, ctx, (scoped) =>
     scoped.whazingInstance.create({
       data: {
+        tenantId,
         name: input.name.trim(),
         baseUrl: input.baseUrl.trim().replace(/\/+$/, ""),
         apiKey: encryptJson(input.apiKey),
@@ -244,9 +247,12 @@ export async function createWhazingInbox(
   input: CreateWhazingInboxInput,
   db: PrismaClient = basePrisma,
 ): Promise<WhazingInboxDto> {
+  if (ctx.tenantId === null) throw new AppError("tenant required", 400);
+  const tenantId = ctx.tenantId;
   const row = await runScopedOn(db, ctx, (scoped) =>
     scoped.whazingInbox.create({
       data: {
+        tenantId,
         instanceId,
         whazingQueueId: input.whazingQueueId ?? null,
         name: input.name ?? null,

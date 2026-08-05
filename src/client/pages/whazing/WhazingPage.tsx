@@ -249,7 +249,7 @@ export function WhazingPage() {
     for (let i = 0; i < ids.length; i++) {
       const id = ids[i] as string;
       const r = results[i];
-      if (r.status === "fulfilled" && r.value.data) {
+      if (r && r.status === "fulfilled" && r.value.data) {
         next[id] = r.value.data.inboxes;
       }
     }
