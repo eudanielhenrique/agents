@@ -183,7 +183,7 @@ function WebhookUrlCopy({ url }: { url: string }) {
         {url}
       </code>
       <Tooltip
-        content={copied ? t("common.copied", "Copied!") : t("common.copy", "Copy")}
+        content={copied ? t("common.copied", "Copied") : t("common.copy", "Copy")}
       >
         <button
           type="button"
