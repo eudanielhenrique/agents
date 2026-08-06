@@ -916,6 +916,7 @@
       "knowledge": "Knowledge",
       "model": "Model",
       "playground": "Playground",
+      "tests": "Tests",
       "tools": "Tools"
     },
     "tabs": "Agent settings",
@@ -1656,6 +1657,34 @@
       "visionImage": "Image reading"
     },
     "untitledSession": "Untitled session"
+  },
+  "promptTests": {
+    "actualReply": "Reply: {{reply}}",
+    "add": "New test case",
+    "addTitle": "New test case",
+    "badgeCallTool": "🔧 {{value}}",
+    "badgeContain": "+ {{value}}",
+    "badgeNotCallTool": "🚫 {{value}}",
+    "badgeNotContain": "− {{value}}",
+    "csvPlaceholder": "comma-separated, e.g. particular, Barra de São Francisco",
+    "deleted": "Test case deleted.",
+    "deleteError": "Could not delete the test case.",
+    "editTitle": "Edit test case",
+    "failures": "Failures:",
+    "mustCallTool": "Must call tool",
+    "mustContain": "Reply must contain",
+    "mustNotCallTool": "Must NOT call tool",
+    "mustNotContain": "Reply must NOT contain",
+    "name": "Name",
+    "namePlaceholder": "e.g. Convênio question",
+    "none": "No test cases yet. Add one to start catching prompt regressions.",
+    "runAll": "Run all",
+    "runError": "Could not run the test suite.",
+    "saveError": "Could not save the test case.",
+    "subtitle": "Single-turn scenarios replayed against the current (even unsaved) prompt, so you catch regressions before publishing.",
+    "summary": "{{pass}} of {{total}} passed",
+    "toolCsvPlaceholder": "comma-separated tool names, e.g. handoff_to_human",
+    "userMessage": "User message"
   },
   "resources": {
     "deleteRefsWarning_one": "{{count}} agent uses this and will stop working if you delete it.",

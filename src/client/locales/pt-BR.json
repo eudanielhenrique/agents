@@ -917,6 +917,7 @@
       "knowledge": "Conhecimento",
       "model": "Modelo",
       "playground": "Playground",
+      "tests": "Testes",
       "tools": "Ferramentas"
     },
     "tabs": "Configurações do agente",
@@ -1660,6 +1661,34 @@
       "visionImage": "Leitura de imagem"
     },
     "untitledSession": "Sessão sem título"
+  },
+  "promptTests": {
+    "actualReply": "Resposta: {{reply}}",
+    "add": "Novo caso de teste",
+    "addTitle": "Novo caso de teste",
+    "badgeCallTool": "🔧 {{value}}",
+    "badgeContain": "+ {{value}}",
+    "badgeNotCallTool": "🚫 {{value}}",
+    "badgeNotContain": "− {{value}}",
+    "csvPlaceholder": "separado por vírgula, ex: particular, Barra de São Francisco",
+    "deleted": "Caso de teste excluído.",
+    "deleteError": "Não foi possível excluir o caso de teste.",
+    "editTitle": "Editar caso de teste",
+    "failures": "Falhas:",
+    "mustCallTool": "Deve chamar a ferramenta",
+    "mustContain": "Resposta deve conter",
+    "mustNotCallTool": "NÃO deve chamar a ferramenta",
+    "mustNotContain": "Resposta NÃO deve conter",
+    "name": "Nome",
+    "namePlaceholder": "ex: Pergunta sobre convênio",
+    "none": "Nenhum caso de teste ainda. Adicione um para começar a pegar regressões de prompt.",
+    "runAll": "Rodar tudo",
+    "runError": "Não foi possível rodar a suíte de testes.",
+    "saveError": "Não foi possível salvar o caso de teste.",
+    "subtitle": "Cenários de uma pergunta rodados contra o prompt atual (mesmo que não salvo), pra pegar regressões antes de publicar.",
+    "summary": "{{pass}} de {{total}} passaram",
+    "toolCsvPlaceholder": "nomes de ferramenta separados por vírgula, ex: handoff_to_human",
+    "userMessage": "Mensagem do usuário"
   },
   "resources": {
     "deleteRefsWarning_one": "{{count}} agente usa isto e vai parar de funcionar se você excluir.",

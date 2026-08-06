@@ -149,6 +149,7 @@ model Tenant {
   whazingWebhookDeliveries      WhazingWebhookDelivery[]
   whazingInboxes                WhazingInbox[]
   whazingConversations          WhazingConversation[]
+  promptTestCases               PromptTestCase[]
 
   @@map("tenants")
 }
@@ -406,9 +407,9 @@ model WhazingInbox {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
-  tenant        Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  instance      WhazingInstance        @relation(fields: [instanceId], references: [id], onDelete: Cascade)
-  agent         Agent?                 @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  tenant        Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  instance      WhazingInstance       @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  agent         Agent?                @relation(fields: [agentId], references: [id], onDelete: SetNull)
   conversations WhazingConversation[]
 
   @@index([tenantId])
@@ -626,10 +627,11 @@ model Agent {
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
 
-  tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  toolSelections AgentToolSelection[]
-  chatwootBots   ChatwootAgentBot[]
-  whazingInboxes WhazingInbox[]
+  tenant          Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  toolSelections  AgentToolSelection[]
+  chatwootBots    ChatwootAgentBot[]
+  whazingInboxes  WhazingInbox[]
+  promptTestCases PromptTestCase[]
 
   @@index([tenantId])
   @@map("agents")
@@ -1121,6 +1123,30 @@ model PromptVariantAssignment {
   @@unique([tenantId, threadId, experimentId])
   @@index([tenantId])
   @@map("prompt_variant_assignments")
+}
+
+// Single-turn regression scenario for an agent's prompt: a fixed user message + assertions
+// checked against a playground turn (optionally against a draft/unsaved prompt override), so a
+// prompt edit can be checked for regressions before publishing. Results are NOT persisted —
+// runPromptTestSuite runs live and returns pass/fail; add a run-history table later only if a
+// trend over time is actually wanted.
+model PromptTestCase {
+  id          BigInt   @id @default(autoincrement())
+  tenantId    BigInt   @map("tenant_id")
+  agentId     BigInt   @map("agent_id")
+  name        String
+  userMessage String   @map("user_message")
+  // { mustContain: string[], mustNotContain: string[], mustCallTool: string[], mustNotCallTool: string[] }
+  assertions  Json     @default("{}")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent  Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([agentId])
+  @@map("prompt_test_cases")
 }
 
 // ─────────────────────────────────────── observability & audit ──

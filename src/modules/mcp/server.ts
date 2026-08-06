@@ -61,6 +61,8 @@ import {
   brandingAssetSet,
   brandingSet,
   credentialCreate,
+  err,
+  ok,
   promptSet,
   tenantUpdate,
   type WriteResult,
@@ -99,6 +101,10 @@ import {
   conversationReturn,
   conversationStatus,
 } from "./write-conversations";
+import {
+  listPromptTestCases,
+  runPromptTestSuite,
+} from "@/modules/prompt-tests/service";
 import { tenantCreate, tenantGet, tenantList } from "./write-fleet";
 import {
   knowledgeApprove,
@@ -505,6 +511,59 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
             ],
             isError: true,
           };
+        }
+      },
+    );
+
+    registerTenantTool(
+      server,
+      principal,
+      "prompt_test_list",
+      {
+        description:
+          "List an agent's saved prompt regression scenarios (single-turn message + assertions). Use prompt_test_run to replay them.",
+        inputSchema: { agent_id: z.string() },
+      },
+      async (args: { agent_id: string }, eff) => {
+        try {
+          const testCases = await listPromptTestCases(
+            principalCtx(eff),
+            BigInt(args.agent_id),
+          );
+          return writeContent(ok({ testCases }));
+        } catch (e) {
+          return writeContent(err(e instanceof Error ? e.message : String(e)));
+        }
+      },
+    );
+
+    registerTenantTool(
+      server,
+      principal,
+      "prompt_test_run",
+      {
+        description:
+          "Replay every saved prompt_test_list scenario for an agent via the playground turn path and return pass/fail per case. Pass draft_system_prompt to test an UNSAVED prompt edit before publishing (catches regressions the way agent_playground does for one ad-hoc message, but batched and repeatable). Results are not persisted.",
+        inputSchema: {
+          agent_id: z.string(),
+          draft_system_prompt: z
+            .string()
+            .optional()
+            .describe(
+              "Unsaved prompt text to test against instead of the agent's saved systemPrompt.",
+            ),
+        },
+      },
+      async (args: { agent_id: string; draft_system_prompt?: string }, eff) => {
+        try {
+          const results = await runPromptTestSuite(
+            principalCtx(eff),
+            BigInt(args.agent_id),
+            { draftSystemPrompt: args.draft_system_prompt },
+          );
+          return writeContent(ok({ results }));
+        } catch (e) {
+          return writeContent(err(e instanceof Error ? e.message : String(e)));
         }
       },
     );

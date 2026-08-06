@@ -4,6 +4,7 @@ import {
   Clock,
   Copy,
   Download,
+  ListChecks,
   MessageSquare,
   RadioTower,
   Settings2,
@@ -84,6 +85,7 @@ import { GuardrailsTab } from "./GuardrailsTab";
 import { KnowledgeTab } from "./KnowledgeTab";
 import { PlaygroundFab } from "./PlaygroundFab";
 import { PlaygroundTab } from "./PlaygroundTab";
+import { PromptTestsTab } from "./PromptTestsTab";
 import { ToolsTab } from "./ToolsTab";
 import type {
   GrantState,
@@ -109,7 +111,8 @@ type TabKey =
   | "behavior"
   | "guardrails"
   | "channelRedirect"
-  | "playground";
+  | "playground"
+  | "tests";
 
 // Ordered tab keys; also the source of truth for validating the URL `:tab` segment.
 // NOTE: the former "model" tab merged into "general"; unknown segments (including
@@ -121,6 +124,7 @@ const TAB_KEYS: TabKey[] = [
   "behavior",
   "guardrails",
   "playground",
+  "tests",
 ];
 
 // The four config sections with their own unsaved-changes baseline + save button. Each is tracked
@@ -2089,6 +2093,11 @@ export function AgentEditorPage() {
       label: t("editor.tab.playground", "Playground"),
       icon: MessageSquare,
     },
+    {
+      key: "tests",
+      label: t("editor.tab.tests", "Tests"),
+      icon: ListChecks,
+    },
   ];
 
   return (
@@ -2522,6 +2531,10 @@ export function AgentEditorPage() {
                 capabilities={playgroundCapabilities}
                 toolsDirty={toolsDirty}
               />
+            )}
+
+            {tab === "tests" && (
+              <PromptTestsTab agentId={id} systemPrompt={systemPrompt} />
             )}
 
             {/* Floating playground panel over the other tabs (opened from the save bar's "Test in

@@ -39,6 +39,13 @@ import {
   getPlaygroundSessionTurns,
   listPlaygroundSessions,
 } from "@/modules/playground/sessions";
+import {
+  createPromptTestCase,
+  deletePromptTestCase,
+  listPromptTestCases,
+  runPromptTestSuite,
+  updatePromptTestCase,
+} from "@/modules/prompt-tests/service";
 import { listTtsOptions } from "@/modules/tts/listing";
 
 // translate('errors.agentConfirmMismatch', 'The agent name does not match')
@@ -129,6 +136,19 @@ function parseDraft(
     return undefined;
   }
 }
+
+// Prompt test case body: a single-turn scenario (message + assertions checked against the
+// playground reply/trace — see src/modules/prompt-tests/service.ts).
+const promptTestCaseBodySchema = t.Object({
+  name: t.String({ minLength: 1, maxLength: 200 }),
+  userMessage: t.String({ minLength: 1, maxLength: 10_000 }),
+  assertions: t.Object({
+    mustContain: t.Optional(t.Array(t.String({ maxLength: 500 }))),
+    mustNotContain: t.Optional(t.Array(t.String({ maxLength: 500 }))),
+    mustCallTool: t.Optional(t.Array(t.String({ maxLength: 200 }))),
+    mustNotCallTool: t.Optional(t.Array(t.String({ maxLength: 200 }))),
+  }),
+});
 
 // Arbitrary text (a transcription / extraction) that might start with `{`/`[`, which Elysia's
 // multipart parser would auto-parse into an object (see parseDraft). The client sends it JSON-encoded
@@ -1077,6 +1097,146 @@ export const agentsController = new Elysia({
             "Playground thread id, shaped tenantId:playground:agentId:uuid.",
         }),
       }),
+    },
+  )
+  // Prompt regression test suite: single-turn scenarios (message + assertions) saved per agent,
+  // replayed via the playground turn path so a prompt edit can be checked for regressions before
+  // publishing. Results are ephemeral — run-on-demand, not persisted.
+  .get(
+    "/:id/prompt-tests",
+    async ({ tenantContext, params }) => {
+      const ctx = ctxOrThrow(tenantContext);
+      return {
+        instance: instanceIdentity,
+        testCases: await listPromptTestCases(ctx, BigInt(params.id)),
+      };
+    },
+    {
+      detail: doc(
+        "List prompt test cases",
+        "Returns the agent's saved prompt regression scenarios.",
+      ),
+      response: errors(400, 401, 403, 404),
+      requireRole: "TENANT_ADMIN",
+      params: t.Object({
+        id: t.String({
+          description: "Agent id, a BigInt encoded as a decimal string.",
+        }),
+      }),
+    },
+  )
+  .post(
+    "/:id/prompt-tests",
+    async ({ tenantContext, params, body }) => {
+      const ctx = ctxOrThrow(tenantContext);
+      return {
+        instance: instanceIdentity,
+        testCase: await createPromptTestCase(ctx, BigInt(params.id), body),
+      };
+    },
+    {
+      detail: doc(
+        "Create a prompt test case",
+        "Adds a single-turn regression scenario (message + assertions) to the agent.",
+      ),
+      response: errors(400, 401, 403, 404),
+      requireRole: "TENANT_ADMIN",
+      params: t.Object({
+        id: t.String({
+          description: "Agent id, a BigInt encoded as a decimal string.",
+        }),
+      }),
+      body: promptTestCaseBodySchema,
+    },
+  )
+  .patch(
+    "/:id/prompt-tests/:testId",
+    async ({ tenantContext, params, body }) => {
+      const ctx = ctxOrThrow(tenantContext);
+      return {
+        instance: instanceIdentity,
+        testCase: await updatePromptTestCase(
+          ctx,
+          BigInt(params.testId),
+          body,
+        ),
+      };
+    },
+    {
+      detail: doc(
+        "Update a prompt test case",
+        "Updates a saved regression scenario's message/assertions.",
+      ),
+      response: errors(400, 401, 403, 404),
+      requireRole: "TENANT_ADMIN",
+      params: t.Object({
+        id: t.String({
+          description: "Agent id, a BigInt encoded as a decimal string.",
+        }),
+        testId: t.String({
+          description: "Test case id, a BigInt encoded as a decimal string.",
+        }),
+      }),
+      body: t.Partial(promptTestCaseBodySchema),
+    },
+  )
+  .delete(
+    "/:id/prompt-tests/:testId",
+    async ({ tenantContext, params }) => {
+      const ctx = ctxOrThrow(tenantContext);
+      await deletePromptTestCase(ctx, BigInt(params.testId));
+      return { instance: instanceIdentity, ok: true };
+    },
+    {
+      detail: doc(
+        "Delete a prompt test case",
+        "Removes a saved regression scenario.",
+      ),
+      response: errors(400, 401, 403, 404),
+      requireRole: "TENANT_ADMIN",
+      params: t.Object({
+        id: t.String({
+          description: "Agent id, a BigInt encoded as a decimal string.",
+        }),
+        testId: t.String({
+          description: "Test case id, a BigInt encoded as a decimal string.",
+        }),
+      }),
+    },
+  )
+  .post(
+    "/:id/prompt-tests/run",
+    async ({ tenantContext, params, body }) => {
+      const ctx = ctxOrThrow(tenantContext);
+      return {
+        instance: instanceIdentity,
+        results: await runPromptTestSuite(ctx, BigInt(params.id), {
+          draftSystemPrompt: body?.draftSystemPrompt,
+        }),
+      };
+    },
+    {
+      detail: doc(
+        "Run the prompt test suite",
+        "Replays every saved test case against the agent's current saved prompt, or an unsaved draft when draftSystemPrompt is provided, and returns pass/fail per case.",
+      ),
+      response: errors(400, 401, 403, 404),
+      requireRole: "TENANT_ADMIN",
+      params: t.Object({
+        id: t.String({
+          description: "Agent id, a BigInt encoded as a decimal string.",
+        }),
+      }),
+      body: t.Optional(
+        t.Object({
+          draftSystemPrompt: t.Optional(
+            t.String({
+              description:
+                "Unsaved prompt text to test against instead of the agent's saved systemPrompt.",
+            }),
+          ),
+        }),
+      ),
     },
   )
   // POST to avoid leaking credentialRef/baseURL in server access logs (no query params).
