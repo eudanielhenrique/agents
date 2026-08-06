@@ -145,15 +145,12 @@ function buildWhazingConversationsWhere(
   status: string | undefined,
   q: string | undefined,
   cursorTs: Date | null,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-): any {
-  // @ts-ignore — WhazingConversation types regenerate at build time
+): Record<string, unknown> {
   const where: Record<string, unknown> = {};
   if (status) where.status = status;
   if (cursorTs) where.lastEventAt = { lt: cursorTs };
   const term = q?.trim();
   if (term) {
-    // @ts-ignore
     const or: unknown[] = [
       { contactName: { contains: term, mode: "insensitive" } },
     ];
@@ -216,7 +213,6 @@ export async function listConversations(
       }),
     ),
     runScopedOn(base, ctx, (db) =>
-      // @ts-ignore — WhazingConversation added to schema; types regenerate at build time
       db.whazingConversation.findMany({
         where: whazingWhere,
         orderBy: [
@@ -1313,7 +1309,6 @@ async function loadWhazingConvRef(
   instance: { baseUrl: string };
 }> {
   const row = await runScopedOn(base, ctx, (db) =>
-    // @ts-ignore — WhazingConversation types regenerate at build time
     db.whazingConversation.findUnique({
       where: { id },
       select: {
