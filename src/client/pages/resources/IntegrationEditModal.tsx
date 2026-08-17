@@ -648,9 +648,10 @@ export function IntegrationEditModal({
     if (!form.name.trim() || nuvemshopConnecting) return;
     setNuvemshopConnecting(true);
     try {
-      const { data, error: err } = await api.api.v1.integrations.nuvemshop.connect.post(
-        { name: form.name.trim() },
-      );
+      const { data, error: err } =
+        await api.api.v1.integrations.nuvemshop.connect.post({
+          name: form.name.trim(),
+        });
       if (err || !data) {
         showToast(
           t(
@@ -662,7 +663,11 @@ export function IntegrationEditModal({
         setNuvemshopConnecting(false);
         return;
       }
-      const popup = window.open(data.url, "nuvemshop-oauth", "width=500,height=700");
+      const popup = window.open(
+        data.url,
+        "nuvemshop-oauth",
+        "width=500,height=700",
+      );
       if (!popup) {
         showToast(
           t(
@@ -697,10 +702,7 @@ export function IntegrationEditModal({
           "success",
         );
         modal.close();
-        onSaved?.(
-          { id: outcome.message ?? "", name: form.name.trim() },
-          true,
-        );
+        onSaved?.({ id: outcome.message ?? "", name: form.name.trim() }, true);
       }
     } catch {
       showToast(

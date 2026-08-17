@@ -191,48 +191,67 @@ describe("normalizeWhazingEvent", () => {
         fromMe: false,
         body: null,
         attachments: [
-          { id: "att-1", mediaType: "audio", url: "https://cdn.whazing.com/audio.ogg" },
+          {
+            id: "att-1",
+            mediaType: "audio",
+            url: "https://cdn.whazing.com/audio.ogg",
+          },
         ],
       },
     });
     expect(ev?.message?.attachments).toHaveLength(1);
     expect(ev?.message?.attachments[0]?.mediaType).toBe("audio");
-    expect(ev?.message?.attachments[0]?.mediaUrl).toBe("https://cdn.whazing.com/audio.ogg");
+    expect(ev?.message?.attachments[0]?.mediaUrl).toBe(
+      "https://cdn.whazing.com/audio.ogg",
+    );
   });
 });
+
+// normalizeWhazingEvent returns null only for malformed payloads; every fixture below is
+// well-formed by construction, so a null return here is a broken test, not a valid outcome.
+function mustNormalize(
+  payload: Record<string, unknown>,
+): NonNullable<ReturnType<typeof normalizeWhazingEvent>> {
+  const ev = normalizeWhazingEvent(payload);
+  if (!ev)
+    throw new Error(
+      "normalizeWhazingEvent returned null for a well-formed fixture",
+    );
+  return ev;
+}
 
 // ── isNewIncomingMessage ──────────────────────────────────────────────────────
 
 describe("isNewIncomingMessage", () => {
   const makeEv = (over: Record<string, unknown>) =>
-    normalizeWhazingEvent({
+    mustNormalize({
       event: "message_received",
       ticketId: 1,
       status: "pending",
       message: { id: "m", body: "hello", fromMe: false },
       ...over,
-    })!;
+    });
 
   test("returns true for a well-formed inbound customer message", () => {
     expect(isNewIncomingMessage(makeEv({}))).toBe(true);
   });
 
   test("returns false when event type is not message_received", () => {
-    const ev = normalizeWhazingEvent({
+    const ev = mustNormalize({
       event: "ticket_status_changed",
       ticketId: 1,
       status: "closed",
       message: { body: "done", fromMe: false },
-    })!;
+    });
     expect(isNewIncomingMessage(ev)).toBe(false);
   });
 
   test("returns false when ticketId is null", () => {
-    const ev = normalizeWhazingEvent({
+    const ev = mustNormalize({
       event: "message_received",
       status: "pending",
       message: { body: "hi", fromMe: false },
-    })!;
+    });
     expect(isNewIncomingMessage(ev)).toBe(false);
   });
 
@@ -245,16 +264,16 @@ describe("isNewIncomingMessage", () => {
   });
 
   test("returns false when message is null", () => {
-    const ev = normalizeWhazingEvent({
+    const ev = mustNormalize({
       event: "message_received",
       ticketId: 1,
       status: "pending",
-    })!;
+    });
     expect(isNewIncomingMessage(ev)).toBe(false);
   });
 
   test("returns true for audio-only message (no body, has attachment)", () => {
-    const ev = normalizeWhazingEvent({
+    const ev = mustNormalize({
       event: "message_received",
       ticketId: 1,
       status: "pending",
@@ -265,7 +284,7 @@ describe("isNewIncomingMessage", () => {
           { mediaType: "audio", url: "https://cdn.whazing.com/audio.ogg" },
         ],
       },
-    })!;
+    });
     expect(isNewIncomingMessage(ev)).toBe(true);
   });
 });
@@ -274,21 +293,23 @@ describe("isNewIncomingMessage", () => {
 
 describe("shouldWhazingBotHandle", () => {
   const open = (over: Record<string, unknown>) =>
-    normalizeWhazingEvent({
+    mustNormalize({
       event: "message_received",
       ticketId: 1,
       assignedUserId: null,
       status: "pending",
       message: { body: "hi", fromMe: false },
       ...over,
-    })!;
+    });
 
   test("returns true for an unassigned pending incoming message", () => {
     expect(shouldWhazingBotHandle(open({}))).toBe(true);
   });
 
   test("returns false when fromMe is true (loop prevention)", () => {
-    expect(shouldWhazingBotHandle(open({ message: { body: "echo", fromMe: true } }))).toBe(false);
+    expect(
+      shouldWhazingBotHandle(open({ message: { body: "echo", fromMe: true } })),
+    ).toBe(false);
   });
 
   test("returns false when isAutomation is true", () => {
@@ -307,12 +328,12 @@ describe("shouldWhazingBotHandle", () => {
   });
 
   test("returns false when message is null", () => {
-    const ev = normalizeWhazingEvent({
+    const ev = mustNormalize({
       event: "message_received",
       ticketId: 1,
       assignedUserId: null,
       status: "pending",
-    })!;
+    });
     expect(shouldWhazingBotHandle(ev)).toBe(false);
   });
 });

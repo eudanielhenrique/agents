@@ -130,7 +130,8 @@ const config = {
   googleOAuthEnabled: googleClientId.length > 0,
   nuvemshopClientId,
   nuvemshopClientSecret,
-  nuvemshopOAuthEnabled: nuvemshopClientId.length > 0 && nuvemshopClientSecret.length > 0,
+  nuvemshopOAuthEnabled:
+    nuvemshopClientId.length > 0 && nuvemshopClientSecret.length > 0,
   allowedSignupDomains: parseDomainList(
     ALLOWED_SIGNUP_DOMAINS,
     "ALLOWED_SIGNUP_DOMAINS",

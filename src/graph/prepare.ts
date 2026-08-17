@@ -42,7 +42,6 @@ import {
   type IntegrationSelection,
 } from "@/modules/integrations/toolpacks";
 import { type KanbanConfig, readKanbanConfig } from "@/modules/kanban/settings";
-import { type WhazingPixConfig, readWhazingPixConfig } from "@/modules/whazing/payments";
 import {
   readServiceWindowConfig,
   type ServiceWindowConfig,
@@ -52,6 +51,10 @@ import { readTtsConfig, type TtsConfig } from "@/modules/tts/settings";
 import { ensureFreshGoogleAccessToken } from "@/modules/vault/google-oauth";
 import { ensureFreshMcpAccessToken } from "@/modules/vault/mcp-oauth";
 import { tryResolveVaultEntry } from "@/modules/vault/service";
+import {
+  readWhazingPixConfig,
+  type WhazingPixConfig,
+} from "@/modules/whazing/payments";
 import { chatwootThreadId, getCheckpointer } from "./checkpointer";
 import { buildAgentGraph } from "./graph";
 import {
@@ -743,11 +746,17 @@ export async function buildToolset(
   };
   // handoff/kanban guidance lives in their own grouped config; let it win over the flat map for those
   // two tools (the editor writes them there, not into settings.toolGuidance).
-  if (cfg.handoffConfig.instructions || cfg.handoffConfig.whazingQueueId != null) {
+  if (
+    cfg.handoffConfig.instructions ||
+    cfg.handoffConfig.whazingQueueId != null
+  ) {
     const parts: string[] = [];
-    if (cfg.handoffConfig.instructions) parts.push(cfg.handoffConfig.instructions);
+    if (cfg.handoffConfig.instructions)
+      parts.push(cfg.handoffConfig.instructions);
     if (cfg.handoffConfig.whazingQueueId != null)
-      parts.push(`Whazing queue ID for human handoff: ${cfg.handoffConfig.whazingQueueId}`);
+      parts.push(
+        `Whazing queue ID for human handoff: ${cfg.handoffConfig.whazingQueueId}`,
+      );
     toolInstructions.handoff_to_human = parts.join("\n");
   }
   if (cfg.kanbanConfig.instructions || cfg.kanbanConfig.whazingBoard) {
@@ -761,7 +770,8 @@ export async function buildToolset(
         `Whazing Kanban board: "${wb.boardName}" (boardId: ${wb.boardId}).\nAvailable columns:\n${colList}`,
       );
     }
-    if (cfg.kanbanConfig.instructions) parts.push(cfg.kanbanConfig.instructions);
+    if (cfg.kanbanConfig.instructions)
+      parts.push(cfg.kanbanConfig.instructions);
     toolInstructions.kanban_move_card = parts.join("\n\n");
   }
   return [

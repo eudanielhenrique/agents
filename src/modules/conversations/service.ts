@@ -167,11 +167,14 @@ function buildWhazingConversationsWhere(
 // (Whazing); a bare numeric id is treated as legacy Chatwoot for back-compat. Single source for
 // every caller that accepts a cross-transport conversation id (v1 REST, MCP read tools) — keep
 // them routing through this instead of re-deriving the prefix scheme.
-export function parseConvId(
-  raw: string,
-): { transport: "chatwoot" | "whazing"; id: bigint } {
-  if (raw.startsWith("w_")) return { transport: "whazing", id: BigInt(raw.slice(2)) };
-  if (raw.startsWith("c_")) return { transport: "chatwoot", id: BigInt(raw.slice(2)) };
+export function parseConvId(raw: string): {
+  transport: "chatwoot" | "whazing";
+  id: bigint;
+} {
+  if (raw.startsWith("w_"))
+    return { transport: "whazing", id: BigInt(raw.slice(2)) };
+  if (raw.startsWith("c_"))
+    return { transport: "chatwoot", id: BigInt(raw.slice(2)) };
   return { transport: "chatwoot", id: BigInt(raw) };
 }
 
@@ -184,7 +187,11 @@ export async function listConversations(
   const status = normalizeStatus(filter.status);
   const cursorTs = parseTsCursor(filter.cursor);
   const chatwootWhere = buildConversationsWhere(status, filter.q, cursorTs);
-  const whazingWhere = buildWhazingConversationsWhere(status, filter.q, cursorTs);
+  const whazingWhere = buildWhazingConversationsWhere(
+    status,
+    filter.q,
+    cursorTs,
+  );
 
   // Fetch take+1 from each source so we can detect "has more" without a count query.
   const [chatwootRows, whazingRows] = await Promise.all([
@@ -276,24 +283,26 @@ export async function listConversations(
     contactName: r.contact?.name ?? null,
   }));
 
-  const wzNorm: RawRow[] = (whazingRows as Array<Record<string, unknown>>).map((r) => ({
-    _type: "whazing",
-    id: r.id as bigint,
-    threadId: r.threadId as string,
-    chatwootConversationId: 0,
-    whazingTicketId: r.ticketId as number,
-    status: r.status as string,
-    assigneeId: (r.assignedUserId as number | null) ?? null,
-    assigneeType: null,
-    assigneeName: null,
-    lastEventAt: (r.lastEventAt as Date | null) ?? null,
-    lastError: (r.lastError as string | null) ?? null,
-    lastErrorAt: (r.lastErrorAt as Date | null) ?? null,
-    inboxId: (r.inbox as { id: bigint } | null)?.id ?? null,
-    inboxName: (r.inbox as { name: string } | null)?.name ?? null,
-    agentId: (r.agentId as bigint | null) ?? null,
-    contactName: (r.contactName as string | null) ?? null,
-  }));
+  const wzNorm: RawRow[] = (whazingRows as Array<Record<string, unknown>>).map(
+    (r) => ({
+      _type: "whazing",
+      id: r.id as bigint,
+      threadId: r.threadId as string,
+      chatwootConversationId: 0,
+      whazingTicketId: r.ticketId as number,
+      status: r.status as string,
+      assigneeId: (r.assignedUserId as number | null) ?? null,
+      assigneeType: null,
+      assigneeName: null,
+      lastEventAt: (r.lastEventAt as Date | null) ?? null,
+      lastError: (r.lastError as string | null) ?? null,
+      lastErrorAt: (r.lastErrorAt as Date | null) ?? null,
+      inboxId: (r.inbox as { id: bigint } | null)?.id ?? null,
+      inboxName: (r.inbox as { name: string } | null)?.name ?? null,
+      agentId: (r.agentId as bigint | null) ?? null,
+      contactName: (r.contactName as string | null) ?? null,
+    }),
+  );
 
   // Merge and sort: lastEventAt DESC nulls-last, then id DESC (arbitrary tie-break across transports).
   const merged = [...cwNorm, ...wzNorm].sort((a, b) => {
@@ -311,7 +320,9 @@ export async function listConversations(
 
   // Resolve the bound persona names + out-of-hours for this page in batched reads.
   const agentIds = [
-    ...new Set(pageRows.map((r) => r.agentId).filter((x): x is bigint => x != null)),
+    ...new Set(
+      pageRows.map((r) => r.agentId).filter((x): x is bigint => x != null),
+    ),
   ];
   const agentNameById = new Map<string, string>();
   const agentHoursId = new Map<string, bigint | null>();
@@ -351,7 +362,9 @@ export async function listConversations(
   const agentOutOfHours = (agentId: bigint | null | undefined): boolean => {
     if (agentId == null) return false;
     const hId = agentHoursId.get(String(agentId));
-    return hId != null ? (outOfHoursByHoursId.get(String(hId)) ?? false) : false;
+    return hId != null
+      ? (outOfHoursByHoursId.get(String(hId)) ?? false)
+      : false;
   };
 
   const items: ConversationListItem[] = pageRows.map((r) => ({
@@ -372,7 +385,8 @@ export async function listConversations(
         ? { id: String(r.inboxId), name: r.inboxName }
         : null,
     contact: r.contactName != null ? { name: r.contactName } : null,
-    agentName: r.agentId != null ? (agentNameById.get(String(r.agentId)) ?? null) : null,
+    agentName:
+      r.agentId != null ? (agentNameById.get(String(r.agentId)) ?? null) : null,
     outOfHours: agentOutOfHours(r.agentId),
   }));
 
@@ -1329,7 +1343,10 @@ async function loadWhazingConvRef(
     }),
   );
   if (!row) {
-    throw new NotFoundError("conversation not found", "errors.conversationNotFound");
+    throw new NotFoundError(
+      "conversation not found",
+      "errors.conversationNotFound",
+    );
   }
   return row as {
     id: bigint;
@@ -1363,21 +1380,31 @@ export async function getWhazingConversationDetail(
       ? await runScopedOn(base, ctx, (db) =>
           db.agent.findUnique({
             where: { id: agentId },
-            select: { name: true, mode: true, modelConfig: true, businessHoursId: true },
+            select: {
+              name: true,
+              mode: true,
+              modelConfig: true,
+              businessHoursId: true,
+            },
           }),
         )
       : null;
 
   let outOfHours = false;
-  if (agent?.businessHoursId != null) {
+  const businessHoursId = agent?.businessHoursId;
+  if (businessHoursId != null) {
     const bh = await runScopedOn(base, ctx, (db) =>
       db.businessHours.findUnique({
-        where: { id: agent.businessHoursId! },
+        where: { id: businessHoursId },
         select: { windows: true, timezone: true },
       }),
     );
     if (bh) {
-      outOfHours = isOutOfHoursNow(parseWindows(bh.windows), bh.timezone, new Date());
+      outOfHours = isOutOfHoursNow(
+        parseWindows(bh.windows),
+        bh.timezone,
+        new Date(),
+      );
     }
   }
 
@@ -1425,10 +1452,15 @@ export async function getWhazingConversationDetail(
         errorMessage: r.status === "error" ? r.errorMessage : null,
         at: r.createdAt.toISOString(),
       });
-    } else if (r.stage === "generate" && detail && typeof detail.trigger === "string") {
+    } else if (
+      r.stage === "generate" &&
+      detail &&
+      typeof detail.trigger === "string"
+    ) {
       trail.push({
         id: String(r.id),
-        kind: detail.trigger === "appointment_reminder" ? "reminder" : "followup",
+        kind:
+          detail.trigger === "appointment_reminder" ? "reminder" : "followup",
         name: detail.trigger,
         status: r.status,
         durationMs: r.durationMs,
@@ -1452,8 +1484,13 @@ export async function getWhazingConversationDetail(
     assigneeName: null,
     lastError: conv.lastError,
     lastErrorAt: conv.lastErrorAt ? conv.lastErrorAt.toISOString() : null,
-    inbox: conv.inbox ? { id: String(conv.inbox.id), name: conv.inbox.name } : null,
-    contact: conv.contactName != null ? { name: conv.contactName, voiceReply: null } : null,
+    inbox: conv.inbox
+      ? { id: String(conv.inbox.id), name: conv.inbox.name }
+      : null,
+    contact:
+      conv.contactName != null
+        ? { name: conv.contactName, voiceReply: null }
+        : null,
     agentId: agentId != null ? String(agentId) : null,
     agentName: agent?.name ?? null,
     agentMode: agent ? (agent.mode === "test" ? "test" : "production") : null,
@@ -1503,11 +1540,24 @@ function normalizeWhazingTicketMessages(raw: unknown): ConversationMessage[] {
           : null;
     const rawAtts = Array.isArray(msg.attachments) ? msg.attachments : [];
     const attachments: ConversationAttachment[] = (rawAtts as unknown[])
-      .filter((a): a is Record<string, unknown> => typeof a === "object" && a !== null)
+      .filter(
+        (a): a is Record<string, unknown> =>
+          typeof a === "object" && a !== null,
+      )
       .map((a) => ({
         id: typeof a.id === "number" ? a.id : null,
-        fileType: typeof a.mediaType === "string" ? a.mediaType : (typeof a.type === "string" ? a.type : null),
-        dataUrl: typeof a.mediaUrl === "string" ? a.mediaUrl : (typeof a.url === "string" ? a.url : null),
+        fileType:
+          typeof a.mediaType === "string"
+            ? a.mediaType
+            : typeof a.type === "string"
+              ? a.type
+              : null,
+        dataUrl:
+          typeof a.mediaUrl === "string"
+            ? a.mediaUrl
+            : typeof a.url === "string"
+              ? a.url
+              : null,
         thumbUrl: null,
         transcribedText: null,
       }));
@@ -1571,7 +1621,10 @@ export async function getWhazingConversationMedia(
     sameOrigin = false;
   }
   if (!sameOrigin) {
-    throw new AppError("media url is not on the conversation's Whazing instance", 400);
+    throw new AppError(
+      "media url is not on the conversation's Whazing instance",
+      400,
+    );
   }
   const client = await loadWhazingClient(tenantId, conv.instanceId, base);
   const { bytes, contentType } = await client.downloadMedia(url);

@@ -908,7 +908,8 @@ function getCurrentTimeTool(ctx: ToolCtx) {
 // silently not existing — and so buildNativeTools keeps covering every name in NATIVE_TOOL_NAMES.
 function unsupportedOnChatwootTool(name: string, description: string) {
   return tool(
-    async () => `${description} Not available on Chatwoot — this is a Whazing-only capability.`,
+    async () =>
+      `${description} Not available on Chatwoot — this is a Whazing-only capability.`,
     { name, description, schema: z.object({}) },
   );
 }

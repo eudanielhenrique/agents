@@ -3,7 +3,7 @@ import { decryptJson } from "@/api/lib/crypto";
 import basePrisma from "@/api/lib/prisma";
 import { asSuperAdminOn, runScopedOn, type TenantContext } from "@/lib/tenancy";
 import { hashRouteToken } from "@/modules/webhooks/inbound/route-token";
-import { type WhazingClient, createWhazingClient } from "./client";
+import { createWhazingClient, type WhazingClient } from "./client";
 
 function sysCtx(tenantId: bigint): TenantContext {
   return { tenantId, userId: null, role: "TENANT_ADMIN" };
@@ -23,7 +23,9 @@ export async function loadWhazingClient(
     }),
   );
   if (!row)
-    throw new Error(`WhazingInstance ${instanceId} not found for tenant ${tenantId}`);
+    throw new Error(
+      `WhazingInstance ${instanceId} not found for tenant ${tenantId}`,
+    );
   if (row.disconnectedAt !== null)
     throw new Error(`WhazingInstance ${instanceId} is disconnected`);
   const apiKey = decryptJson<string>(row.apiKey);

@@ -14,9 +14,6 @@ import { auditController } from "@/api/v1/audit.controller";
 import { businessHoursController } from "@/api/v1/business-hours.controller";
 import { chatwootController } from "@/api/v1/chatwoot.controller";
 import { chatwootAdminController } from "@/api/v1/chatwoot-admin.controller";
-import { whazingController } from "@/api/v1/whazing.controller";
-import { whazingInboxesController } from "@/api/v1/whazing-inboxes.controller";
-import { whazingWebhookController } from "@/api/v1/whazing-webhook.controller";
 import { experimentsController } from "@/api/v1/experiments.controller";
 import { integrationsController } from "@/api/v1/integrations.controller";
 import { integrationsAdminController } from "@/api/v1/integrations-admin.controller";
@@ -33,19 +30,22 @@ import {
   oauthGoogleVaultController,
 } from "@/api/v1/oauth-google.controller";
 import {
-  nuvemshopCallbackController,
-  nuvemshopConnectController,
-} from "@/api/v1/oauth-nuvemshop.controller";
-import {
   oauthMcpCallbackController,
   oauthMcpVaultController,
 } from "@/api/v1/oauth-mcp.controller";
+import {
+  nuvemshopCallbackController,
+  nuvemshopConnectController,
+} from "@/api/v1/oauth-nuvemshop.controller";
 import { quotesController } from "@/api/v1/quotes.controller";
 import { tenantSettingsController } from "@/api/v1/tenant-settings.controller";
 import { toolsController } from "@/api/v1/tools.controller";
 import { v1Controller } from "@/api/v1/v1.controller";
 import { vaultController } from "@/api/v1/vault.controller";
 import { webhooksController } from "@/api/v1/webhooks.controller";
+import { whazingController } from "@/api/v1/whazing.controller";
+import { whazingInboxesController } from "@/api/v1/whazing-inboxes.controller";
+import { whazingWebhookController } from "@/api/v1/whazing-webhook.controller";
 import config from "@/config";
 
 // DEV docs (Scalar): the x-tenant-id header is the SUPER_ADMIN tenant selector, read only on

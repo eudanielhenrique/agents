@@ -34,9 +34,7 @@ function coerceNum(v: unknown): number | null {
   return null;
 }
 
-function normalizeContact(
-  raw: unknown,
-): NormalizedWhazingContact | null {
+function normalizeContact(raw: unknown): NormalizedWhazingContact | null {
   if (!raw || typeof raw !== "object") return null;
   const c = raw as Record<string, unknown>;
   return {
@@ -167,7 +165,7 @@ export function isNewIncomingMessage(event: NormalizedWhazingEvent): boolean {
   if (event.ticketId == null) return false;
   const msg = event.message;
   if (!msg) return false;
-  return !!(msg.body?.trim()) || msg.attachments.length > 0;
+  return !!msg.body?.trim() || msg.attachments.length > 0;
 }
 
 // Returns true when the bot should handle this event (not skip it).

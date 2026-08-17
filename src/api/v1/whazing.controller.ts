@@ -1,9 +1,14 @@
 import { Elysia, t } from "elysia";
 import { doc, errors } from "@/api/lib/openapi";
 import { tenancyPlugin } from "@/api/middlewares/tenancy";
-import { ForbiddenError, NotFoundError, TenantTargetRequiredError } from "@/lib/errors";
+import {
+  ForbiddenError,
+  NotFoundError,
+  TenantTargetRequiredError,
+} from "@/lib/errors";
 import { instanceIdentity } from "@/lib/instance";
 import type { TenantContext } from "@/lib/tenancy";
+import { loadWhazingClient } from "@/modules/whazing/instance";
 import {
   createWhazingInstance,
   disconnectWhazingInstance,
@@ -12,7 +17,6 @@ import {
   reconnectWhazingInstance,
   updateWhazingInstance,
 } from "@/modules/whazing/management";
-import { loadWhazingClient } from "@/modules/whazing/instance";
 
 // Whazing instance management (per-tenant). TENANT_ADMIN. apiKey is write-only —
 // never returned in any response. routeToken is encrypted at rest and exposed only
@@ -71,11 +75,14 @@ export const whazingController = new Elysia({
       const b = body as { name: string; baseUrl: string; apiKey: string };
       return {
         instance: instanceIdentity,
-        whazingInstance: await createWhazingInstance(ctxOrThrow(tenantContext), {
-          name: b.name,
-          baseUrl: b.baseUrl,
-          apiKey: b.apiKey,
-        }),
+        whazingInstance: await createWhazingInstance(
+          ctxOrThrow(tenantContext),
+          {
+            name: b.name,
+            baseUrl: b.baseUrl,
+            apiKey: b.apiKey,
+          },
+        ),
       };
     },
     {
@@ -87,7 +94,8 @@ export const whazingController = new Elysia({
           description: "Display name for this Whazing instance.",
         }),
         baseUrl: t.String({
-          description: "Base URL of the Whazing API (e.g. https://api.whazing.com).",
+          description:
+            "Base URL of the Whazing API (e.g. https://api.whazing.com).",
         }),
         apiKey: t.String({
           minLength: 1,
@@ -131,9 +139,7 @@ export const whazingController = new Elysia({
             description: "New display name.",
           }),
         ),
-        baseUrl: t.Optional(
-          t.String({ description: "New base URL." }),
-        ),
+        baseUrl: t.Optional(t.String({ description: "New base URL." })),
         apiKey: t.Optional(
           t.String({
             minLength: 1,
@@ -209,7 +215,11 @@ export const whazingController = new Elysia({
         description?: string;
       }>;
       return {
-        boards: boards.map((b) => ({ id: b.id, name: b.name, color: b.color ?? null })),
+        boards: boards.map((b) => ({
+          id: b.id,
+          name: b.name,
+          color: b.color ?? null,
+        })),
       };
     },
     {
@@ -232,11 +242,12 @@ export const whazingController = new Elysia({
       ).catch(() => {
         throw new NotFoundError();
       });
-      const data = (await client.kanbanGetColumns(Number(params.boardId))) as Record<
-        string,
-        unknown
-      >;
-      const columns = (Array.isArray(data?.columns) ? data.columns : []) as Array<{
+      const data = (await client.kanbanGetColumns(
+        Number(params.boardId),
+      )) as Record<string, unknown>;
+      const columns = (
+        Array.isArray(data?.columns) ? data.columns : []
+      ) as Array<{
         id: number;
         name: string;
         color?: string;

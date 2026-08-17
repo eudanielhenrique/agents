@@ -13,7 +13,9 @@ export interface WhazingPixConfig {
 
 const PIX_TYPES: WhazingPixType[] = ["CPF", "CNPJ", "PHONE", "EMAIL", "EVP"];
 
-export function readWhazingPixConfig(settings: unknown): WhazingPixConfig | null {
+export function readWhazingPixConfig(
+  settings: unknown,
+): WhazingPixConfig | null {
   const s =
     settings && typeof settings === "object"
       ? (settings as Record<string, unknown>).whazingPix
@@ -22,7 +24,9 @@ export function readWhazingPixConfig(settings: unknown): WhazingPixConfig | null
   const bag = s as Record<string, unknown>;
   const pixKey = typeof bag.pixKey === "string" ? bag.pixKey.trim() : "";
   const pixName = typeof bag.pixName === "string" ? bag.pixName.trim() : "";
-  const pixType = typeof bag.pixType === "string" ? bag.pixType.toUpperCase() : "";
-  if (!pixKey || !pixName || !PIX_TYPES.includes(pixType as WhazingPixType)) return null;
+  const pixType =
+    typeof bag.pixType === "string" ? bag.pixType.toUpperCase() : "";
+  if (!pixKey || !pixName || !PIX_TYPES.includes(pixType as WhazingPixType))
+    return null;
   return { pixKey, pixName, pixType: pixType as WhazingPixType };
 }

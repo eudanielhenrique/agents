@@ -1,17 +1,16 @@
-import { createHash } from "node:crypto";
 import { Prisma, type PrismaClient } from "@/../generated/prisma/client";
 import logger from "@/api/lib/logger";
 import basePrisma from "@/api/lib/prisma";
 import { AppError, UnauthorizedError } from "@/lib/errors";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
-import { runWhazingAgentTurn } from "./runtime";
+import { resolveInstanceByRouteToken } from "./instance";
 import {
   isNewIncomingMessage,
   normalizeWhazingEvent,
   shouldWhazingBotHandle,
   whazingDeliveryId,
 } from "./normalize";
-import { resolveInstanceByRouteToken } from "./instance";
+import { runWhazingAgentTurn } from "./runtime";
 import type { NormalizedWhazingEvent } from "./types";
 
 // Whazing channel webhook receiver.
@@ -157,7 +156,10 @@ export async function processWhazingDelivery(
 
   try {
     // Double-gate: skip events that carry no actionable customer message.
-    if (!isNewIncomingMessage(normalized) || !shouldWhazingBotHandle(normalized)) {
+    if (
+      !isNewIncomingMessage(normalized) ||
+      !shouldWhazingBotHandle(normalized)
+    ) {
       await markProcessed(base, tenantId, deliveryRowId);
       return;
     }

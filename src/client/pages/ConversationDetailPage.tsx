@@ -1581,7 +1581,10 @@ export function ConversationDetailPage() {
                           runOp(
                             () =>
                               api.api.v1.conversations({ id }).handoff.post({}),
-                            t("conversation.handedOff", "Handed off to a human."),
+                            t(
+                              "conversation.handedOff",
+                              "Handed off to a human.",
+                            ),
                           )
                         }
                       >
@@ -1604,21 +1607,22 @@ export function ConversationDetailPage() {
                         {t("conversation.reopen", "Reopen")}
                       </Button>
                     )}
-                    {conv.status !== "pending" && conv.status !== "resolved" && (
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() =>
-                          returnToAi(
-                            t("conversation.returned", "Returned to the AI."),
-                          )
-                        }
-                      >
-                        <Bot className="h-4 w-4" aria-hidden="true" />
-                        {t("conversation.returnToAi", "Return to AI")}
-                      </Button>
-                    )}
+                    {conv.status !== "pending" &&
+                      conv.status !== "resolved" && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          disabled={busy}
+                          onClick={() =>
+                            returnToAi(
+                              t("conversation.returned", "Returned to the AI."),
+                            )
+                          }
+                        >
+                          <Bot className="h-4 w-4" aria-hidden="true" />
+                          {t("conversation.returnToAi", "Return to AI")}
+                        </Button>
+                      )}
                     {offerReengage && conv.status === "pending" && (
                       <Button
                         variant="primary"
@@ -1641,7 +1645,10 @@ export function ConversationDetailPage() {
                               api.api.v1
                                 .conversations({ id })
                                 .status.post({ status: "resolved" }),
-                            t("conversation.resolved", "Conversation resolved."),
+                            t(
+                              "conversation.resolved",
+                              "Conversation resolved.",
+                            ),
                           )
                         }
                       >
@@ -1792,7 +1799,10 @@ export function ConversationDetailPage() {
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary"
                         >
-                          <ExternalLink className="h-4 w-4" aria-hidden="true" />
+                          <ExternalLink
+                            className="h-4 w-4"
+                            aria-hidden="true"
+                          />
                           {t("conversation.openInWhazing", "Open in Whazing")}
                         </a>
                       )}

@@ -1,6 +1,6 @@
+import type { StructuredToolInterface } from "@langchain/core/tools";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import type { StructuredToolInterface } from "@langchain/core/tools";
 import logger from "@/api/lib/logger";
 import {
   DEFAULT_TIMEZONE,
@@ -250,8 +250,15 @@ function kanbanMoveCardTool(ctx: WhazingToolCtx) {
         .join("\n\n"),
       schema: z.object({
         boardId: z.number().int().positive().describe("Kanban board ID."),
-        columnId: z.number().int().positive().describe("Target column ID to move the card to."),
-        note: z.string().optional().describe("Short note explaining why the card is being moved."),
+        columnId: z
+          .number()
+          .int()
+          .positive()
+          .describe("Target column ID to move the card to."),
+        note: z
+          .string()
+          .optional()
+          .describe("Short note explaining why the card is being moved."),
         priority: z
           .enum(["none", "low", "medium", "high", "urgent"])
           .optional()
@@ -309,15 +316,27 @@ function updateKanbanTaskTool(ctx: WhazingToolCtx) {
         .filter(Boolean)
         .join("\n\n"),
       schema: z.object({
-        boardId: z.number().int().positive().describe("Board ID of the card to update."),
+        boardId: z
+          .number()
+          .int()
+          .positive()
+          .describe("Board ID of the card to update."),
         title: z.string().optional().describe("New card title."),
         priority: z
           .enum(["none", "low", "medium", "high", "urgent"])
           .optional()
           .describe("New priority level."),
-        columnId: z.number().int().positive().optional().describe("Move to this column ID."),
+        columnId: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Move to this column ID."),
         note: z.string().optional().describe("Add a note to the card."),
-        dueDate: z.string().optional().describe("Due date in YYYY-MM-DD format."),
+        dueDate: z
+          .string()
+          .optional()
+          .describe("Due date in YYYY-MM-DD format."),
       }),
     },
   );
@@ -325,23 +344,39 @@ function updateKanbanTaskTool(ctx: WhazingToolCtx) {
 
 const choiceSchema = z.object({
   displayText: z.string().min(1).describe("Label shown on the choice."),
-  type: z.enum(["reply", "copy", "call", "url"]).describe(
-    "reply = sends `id` back as the customer's message; copy = copies `copyText` to clipboard; call = dials `phoneNumber`; url = opens `url`.",
-  ),
+  type: z
+    .enum(["reply", "copy", "call", "url"])
+    .describe(
+      "reply = sends `id` back as the customer's message; copy = copies `copyText` to clipboard; call = dials `phoneNumber`; url = opens `url`.",
+    ),
   id: z.string().optional().describe("Required for type=reply."),
   copyText: z.string().optional().describe("Required for type=copy."),
   phoneNumber: z.string().optional().describe("Required for type=call."),
   url: z.string().optional().describe("Required for type=url."),
 });
 
-function toDynamicChoice(c: z.infer<typeof choiceSchema>): WhazingDynamicChoice {
+function toDynamicChoice(
+  c: z.infer<typeof choiceSchema>,
+): WhazingDynamicChoice {
   switch (c.type) {
     case "reply":
-      return { type: "reply", id: c.id ?? c.displayText, displayText: c.displayText };
+      return {
+        type: "reply",
+        id: c.id ?? c.displayText,
+        displayText: c.displayText,
+      };
     case "copy":
-      return { type: "copy", copyText: c.copyText ?? "", displayText: c.displayText };
+      return {
+        type: "copy",
+        copyText: c.copyText ?? "",
+        displayText: c.displayText,
+      };
     case "call":
-      return { type: "call", phoneNumber: c.phoneNumber ?? "", displayText: c.displayText };
+      return {
+        type: "call",
+        phoneNumber: c.phoneNumber ?? "",
+        displayText: c.displayText,
+      };
     case "url":
       return { type: "url", url: c.url ?? "", displayText: c.displayText };
   }
@@ -358,7 +393,9 @@ function sendButtonMessageTool(ctx: WhazingToolCtx) {
       buttons: { id: string; title: string }[];
       headerImageUrl?: string;
     }) => {
-      await ctx.client.sendButtonMessage(ctx.ticketId, text, buttons, { headerImageUrl });
+      await ctx.client.sendButtonMessage(ctx.ticketId, text, buttons, {
+        headerImageUrl,
+      });
       return "Button message sent.";
     },
     {
@@ -366,18 +403,32 @@ function sendButtonMessageTool(ctx: WhazingToolCtx) {
       description:
         "Send an interactive WhatsApp message with up to 3 quick-reply buttons the customer can tap instead of typing (e.g. confirm/cancel, yes/no, pick a time slot).",
       schema: z.object({
-        text: z.string().min(1).describe("Message body shown above the buttons."),
+        text: z
+          .string()
+          .min(1)
+          .describe("Message body shown above the buttons."),
         buttons: z
           .array(
             z.object({
-              id: z.string().min(1).describe("Echoed back as the customer's reply when tapped."),
-              title: z.string().min(1).max(20).describe("Button label (short, ~20 chars max)."),
+              id: z
+                .string()
+                .min(1)
+                .describe("Echoed back as the customer's reply when tapped."),
+              title: z
+                .string()
+                .min(1)
+                .max(20)
+                .describe("Button label (short, ~20 chars max)."),
             }),
           )
           .min(1)
           .max(3)
           .describe("1 to 3 buttons."),
-        headerImageUrl: z.string().url().optional().describe("Optional image shown above the text."),
+        headerImageUrl: z
+          .string()
+          .url()
+          .optional()
+          .describe("Optional image shown above the text."),
       }),
     },
   );
@@ -394,9 +445,17 @@ function sendListMessageTool(ctx: WhazingToolCtx) {
       headerText?: string;
       bodyText: string;
       buttonText: string;
-      sections: { title: string; rows: { id: string; title: string; description?: string }[] }[];
+      sections: {
+        title: string;
+        rows: { id: string; title: string; description?: string }[];
+      }[];
     }) => {
-      await ctx.client.sendListMessage(ctx.ticketId, { headerText, bodyText, buttonText, sections });
+      await ctx.client.sendListMessage(ctx.ticketId, {
+        headerText,
+        bodyText,
+        buttonText,
+        sections,
+      });
       return "List message sent.";
     },
     {
@@ -404,17 +463,33 @@ function sendListMessageTool(ctx: WhazingToolCtx) {
       description:
         "Send a WhatsApp list message: a button that opens a scrollable menu of grouped options. Use for more than 3 choices, or when each option needs a short description (product catalog, service menu, time slots).",
       schema: z.object({
-        headerText: z.string().optional().describe("Optional small title above the body."),
+        headerText: z
+          .string()
+          .optional()
+          .describe("Optional small title above the body."),
         bodyText: z.string().min(1).describe("Main message text."),
-        buttonText: z.string().min(1).describe("Label of the button that opens the list, e.g. 'Ver opções'."),
+        buttonText: z
+          .string()
+          .min(1)
+          .describe(
+            "Label of the button that opens the list, e.g. 'Ver opções'.",
+          ),
         sections: z
           .array(
             z.object({
-              title: z.string().min(1).describe("Section heading inside the list."),
+              title: z
+                .string()
+                .min(1)
+                .describe("Section heading inside the list."),
               rows: z
                 .array(
                   z.object({
-                    id: z.string().min(1).describe("Echoed back as the customer's reply when tapped."),
+                    id: z
+                      .string()
+                      .min(1)
+                      .describe(
+                        "Echoed back as the customer's reply when tapped.",
+                      ),
                     title: z.string().min(1),
                     description: z.string().optional(),
                   }),
@@ -435,7 +510,11 @@ function sendCarouselMessageTool(ctx: WhazingToolCtx) {
       items,
     }: {
       text: string;
-      items: { text: string; imageUrl: string; choices: z.infer<typeof choiceSchema>[] }[];
+      items: {
+        text: string;
+        imageUrl: string;
+        choices: z.infer<typeof choiceSchema>[];
+      }[];
     }) => {
       await ctx.client.sendCarouselMessage(
         ctx.ticketId,
@@ -453,12 +532,21 @@ function sendCarouselMessageTool(ctx: WhazingToolCtx) {
       description:
         "Send a horizontally-scrollable carousel of cards (image + text + up to 3 choices each). Use to showcase multiple products/plans/options side by side.",
       schema: z.object({
-        text: z.string().min(1).describe("Intro text shown above the carousel."),
+        text: z
+          .string()
+          .min(1)
+          .describe("Intro text shown above the carousel."),
         items: z
           .array(
             z.object({
-              text: z.string().min(1).describe("Card text (title/description)."),
-              imageUrl: z.string().url().describe("Public image URL for the card."),
+              text: z
+                .string()
+                .min(1)
+                .describe("Card text (title/description)."),
+              imageUrl: z
+                .string()
+                .url()
+                .describe("Public image URL for the card."),
               choices: z.array(choiceSchema).min(1).max(3),
             }),
           )
@@ -520,11 +608,25 @@ function requestPaymentTool(ctx: WhazingToolCtx) {
       description:
         "Send a payment-request card for a specific amount, payable via the business's configured PIX key. Only the amount and surrounding copy are yours to fill in — the PIX key itself is fixed by the operator.",
       schema: z.object({
-        amount: z.number().positive().describe("Amount to charge, in BRL (e.g. 199.90)."),
-        text: z.string().optional().describe("Short message shown with the request, e.g. what it's for."),
-        title: z.string().optional().describe("Card title, e.g. 'Detalhes do pedido'."),
+        amount: z
+          .number()
+          .positive()
+          .describe("Amount to charge, in BRL (e.g. 199.90)."),
+        text: z
+          .string()
+          .optional()
+          .describe(
+            "Short message shown with the request, e.g. what it's for.",
+          ),
+        title: z
+          .string()
+          .optional()
+          .describe("Card title, e.g. 'Detalhes do pedido'."),
         footer: z.string().optional(),
-        itemName: z.string().optional().describe("Name of the item/service being charged for."),
+        itemName: z
+          .string()
+          .optional()
+          .describe("Name of the item/service being charged for."),
       }),
     },
   );

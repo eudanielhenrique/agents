@@ -24,8 +24,6 @@ import { AdminLayout } from "@/client/pages/admin/AdminLayout";
 import { AdminTenantsPage } from "@/client/pages/admin/AdminTenantsPage";
 import { AdminUsersPage } from "@/client/pages/admin/AdminUsersPage";
 import { AgentEditorPage } from "@/client/pages/agents/AgentEditorPage";
-import { ChannelsPage } from "@/client/pages/ChannelsPage";
-import { WhazingPage } from "@/client/pages/whazing/WhazingPage";
 import { ConversationDetailPage } from "@/client/pages/ConversationDetailPage";
 import { ConversationsPage } from "@/client/pages/ConversationsPage";
 import { DashboardPage } from "@/client/pages/DashboardPage";
@@ -48,6 +46,7 @@ import { SettingsAppearancePage } from "@/client/pages/settings/SettingsAppearan
 import { SettingsLayout } from "@/client/pages/settings/SettingsLayout";
 import { SettingsProfilePage } from "@/client/pages/settings/SettingsProfilePage";
 import { WebhooksPage } from "@/client/pages/WebhooksPage";
+import { WhazingPage } from "@/client/pages/whazing/WhazingPage";
 
 export function App() {
   return (

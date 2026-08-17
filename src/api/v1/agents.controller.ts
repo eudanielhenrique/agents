@@ -1155,11 +1155,7 @@ export const agentsController = new Elysia({
       const ctx = ctxOrThrow(tenantContext);
       return {
         instance: instanceIdentity,
-        testCase: await updatePromptTestCase(
-          ctx,
-          BigInt(params.testId),
-          body,
-        ),
+        testCase: await updatePromptTestCase(ctx, BigInt(params.testId), body),
       };
     },
     {

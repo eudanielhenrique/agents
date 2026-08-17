@@ -14,6 +14,10 @@ import {
   runPlaygroundFileTurn,
   runPlaygroundTurn,
 } from "@/modules/playground/service";
+import {
+  listPromptTestCases,
+  runPromptTestSuite,
+} from "@/modules/prompt-tests/service";
 import { hasScope, type VerifiedToken } from "./oauth/tokens";
 import {
   agentGet,
@@ -101,10 +105,6 @@ import {
   conversationReturn,
   conversationStatus,
 } from "./write-conversations";
-import {
-  listPromptTestCases,
-  runPromptTestSuite,
-} from "@/modules/prompt-tests/service";
 import { tenantCreate, tenantGet, tenantList } from "./write-fleet";
 import {
   knowledgeApprove,

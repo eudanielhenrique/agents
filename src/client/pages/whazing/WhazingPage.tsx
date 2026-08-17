@@ -41,9 +41,7 @@ type InstancesData = Awaited<
 type WhazingInstance = NonNullable<InstancesData>["instances"][number];
 
 type InboxesData = Awaited<
-  ReturnType<
-    ReturnType<typeof api.api.v1.whazing.instances>["inboxes"]["get"]
-  >
+  ReturnType<ReturnType<typeof api.api.v1.whazing.instances>["inboxes"]["get"]>
 >["data"];
 type WhazingInbox = NonNullable<InboxesData>["inboxes"][number];
 
@@ -144,7 +142,10 @@ function InboxAgentPicker({
               {t("whazing.noAgent", "No agent")}
             </span>
             {value === null && (
-              <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
+              <Check
+                className="h-4 w-4 shrink-0 text-accent"
+                aria-hidden="true"
+              />
             )}
           </DropdownMenuPrimitive.Item>
           {agents.map((a) => (
@@ -155,7 +156,10 @@ function InboxAgentPicker({
             >
               <span className="flex-1 truncate">{a.name}</span>
               {value === a.id && (
-                <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
+                <Check
+                  className="h-4 w-4 shrink-0 text-accent"
+                  aria-hidden="true"
+                />
               )}
             </DropdownMenuPrimitive.Item>
           ))}
@@ -179,11 +183,13 @@ function WebhookUrlCopy({ url }: { url: string }) {
 
   return (
     <div className="flex items-center gap-1.5 overflow-hidden rounded-lg border border-border bg-bg-tertiary px-3 py-2">
-      <code className="flex-1 truncate font-mono text-xs text-text-secondary">
+      <code className="flex-1 truncate font-mono text-text-secondary text-xs">
         {url}
       </code>
       <Tooltip
-        content={copied ? t("common.copied", "Copied") : t("common.copy", "Copy")}
+        content={
+          copied ? t("common.copied", "Copied") : t("common.copy", "Copy")
+        }
       >
         <button
           type="button"
@@ -241,9 +247,7 @@ export function WhazingPage() {
 
   const loadInboxes = useCallback(async (ids: string[]) => {
     const results = await Promise.allSettled(
-      ids.map((id) =>
-        api.api.v1.whazing.instances({ id }).inboxes.get(),
-      ),
+      ids.map((id) => api.api.v1.whazing.instances({ id }).inboxes.get()),
     );
     const next: Record<string, WhazingInbox[]> = {};
     for (let i = 0; i < ids.length; i++) {
@@ -363,10 +367,7 @@ export function WhazingPage() {
       showToast(t("whazing.disconnected", "Instance disconnected."), "success");
       await load();
     } catch {
-      showToast(
-        t("whazing.disconnectError", "Could not disconnect."),
-        "error",
-      );
+      showToast(t("whazing.disconnectError", "Could not disconnect."), "error");
     }
   }
 
@@ -375,16 +376,13 @@ export function WhazingPage() {
   async function reconnect(inst: WhazingInstance) {
     try {
       // biome-ignore lint/suspicious/noExplicitAny: Eden Treaty type regenerates after build
-      const res = await (api.api.v1.whazing.instances({ id: inst.id }) as any)
-        .reconnect.post();
+      const instance = api.api.v1.whazing.instances({ id: inst.id }) as any;
+      const res = await instance.reconnect.post();
       if (res.error) throw res.error;
       showToast(t("whazing.reconnected", "Instance reconnected."), "success");
       await load();
     } catch {
-      showToast(
-        t("whazing.reconnectError", "Could not reconnect."),
-        "error",
-      );
+      showToast(t("whazing.reconnectError", "Could not reconnect."), "error");
     }
   }
 
@@ -609,33 +607,51 @@ export function WhazingPage() {
                         <Plus className="h-4 w-4" aria-hidden="true" />
                         {t("whazing.addQueue", "Add queue")}
                       </Button>
-                      <Tooltip content={t("whazing.editInstance", "Edit instance")}>
+                      <Tooltip
+                        content={t("whazing.editInstance", "Edit instance")}
+                      >
                         <button
                           type="button"
                           onClick={() => openEdit(inst)}
-                          aria-label={t("whazing.editInstance", "Edit instance")}
+                          aria-label={t(
+                            "whazing.editInstance",
+                            "Edit instance",
+                          )}
                           className="inline-flex shrink-0 items-center justify-center rounded p-1.5 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary"
                         >
                           <Pencil className="h-4 w-4" aria-hidden="true" />
                         </button>
                       </Tooltip>
                       {disconnected ? (
-                        <Tooltip content={t("whazing.reconnect", "Reconnect instance")}>
+                        <Tooltip
+                          content={t("whazing.reconnect", "Reconnect instance")}
+                        >
                           <button
                             type="button"
                             onClick={() => void reconnect(inst)}
-                            aria-label={t("whazing.reconnect", "Reconnect instance")}
+                            aria-label={t(
+                              "whazing.reconnect",
+                              "Reconnect instance",
+                            )}
                             className="inline-flex shrink-0 items-center justify-center rounded p-1.5 text-text-muted transition-colors hover:bg-success/10 hover:text-success"
                           >
                             <PlugZap className="h-4 w-4" aria-hidden="true" />
                           </button>
                         </Tooltip>
                       ) : (
-                        <Tooltip content={t("whazing.disconnect", "Disconnect instance")}>
+                        <Tooltip
+                          content={t(
+                            "whazing.disconnect",
+                            "Disconnect instance",
+                          )}
+                        >
                           <button
                             type="button"
                             onClick={() => void disconnect(inst)}
-                            aria-label={t("whazing.disconnect", "Disconnect instance")}
+                            aria-label={t(
+                              "whazing.disconnect",
+                              "Disconnect instance",
+                            )}
                             className="inline-flex shrink-0 items-center justify-center rounded p-1.5 text-text-muted transition-colors hover:bg-error/10 hover:text-error"
                           >
                             <Unplug className="h-4 w-4" aria-hidden="true" />
@@ -648,7 +664,10 @@ export function WhazingPage() {
                   {/* Webhook URL */}
                   <div className="border-border border-b px-4 py-3">
                     <p className="mb-1.5 text-text-muted text-xs">
-                      {t("whazing.webhookUrlLabel", "Webhook URL — paste in your Whazing dashboard")}
+                      {t(
+                        "whazing.webhookUrlLabel",
+                        "Webhook URL — paste in your Whazing dashboard",
+                      )}
                     </p>
                     <WebhookUrlCopy url={inst.webhookUrl} />
                   </div>
@@ -695,34 +714,56 @@ export function WhazingPage() {
                           <div className="flex shrink-0 items-center gap-2">
                             {disconnected ? (
                               <span className="shrink-0 text-text-muted text-xs">
-                                {t("whazing.instanceDisconnected", "Instance disconnected")}
+                                {t(
+                                  "whazing.instanceDisconnected",
+                                  "Instance disconnected",
+                                )}
                               </span>
                             ) : (
                               <InboxAgentPicker
                                 value={ib.agentId}
                                 agents={agents}
-                                label={t("whazing.answeringAgent", "Answering agent")}
+                                label={t(
+                                  "whazing.answeringAgent",
+                                  "Answering agent",
+                                )}
                                 onChange={(agentId) => bindAgent(ib, agentId)}
                               />
                             )}
-                            <Tooltip content={t("whazing.editQueue", "Edit queue")}>
+                            <Tooltip
+                              content={t("whazing.editQueue", "Edit queue")}
+                            >
                               <button
                                 type="button"
                                 onClick={() => openEditInbox(ib)}
-                                aria-label={t("whazing.editQueue", "Edit queue")}
+                                aria-label={t(
+                                  "whazing.editQueue",
+                                  "Edit queue",
+                                )}
                                 className="inline-flex shrink-0 items-center justify-center rounded p-1 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary"
                               >
-                                <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                                <Pencil
+                                  className="h-3.5 w-3.5"
+                                  aria-hidden="true"
+                                />
                               </button>
                             </Tooltip>
-                            <Tooltip content={t("whazing.deleteQueue", "Delete queue")}>
+                            <Tooltip
+                              content={t("whazing.deleteQueue", "Delete queue")}
+                            >
                               <button
                                 type="button"
                                 onClick={() => void deleteInbox(ib)}
-                                aria-label={t("whazing.deleteQueue", "Delete queue")}
+                                aria-label={t(
+                                  "whazing.deleteQueue",
+                                  "Delete queue",
+                                )}
                                 className="inline-flex shrink-0 items-center justify-center rounded p-1 text-text-muted transition-colors hover:bg-error/10 hover:text-error"
                               >
-                                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                                <Trash2
+                                  className="h-3.5 w-3.5"
+                                  aria-hidden="true"
+                                />
                               </button>
                             </Tooltip>
                           </div>
@@ -831,9 +872,7 @@ export function WhazingPage() {
               onClick={() => void submitEdit()}
               loading={saving}
               disabled={
-                !editName.trim() ||
-                !editBaseUrl.trim() ||
-                editUrlInvalid
+                !editName.trim() || !editBaseUrl.trim() || editUrlInvalid
               }
             >
               {t("common.save", "Save")}
@@ -893,10 +932,7 @@ export function WhazingPage() {
             >
               {t("common.cancel", "Cancel")}
             </Button>
-            <Button
-              onClick={() => void submitAddInbox()}
-              loading={savingInbox}
-            >
+            <Button onClick={() => void submitAddInbox()} loading={savingInbox}>
               {t("common.add", "Add")}
             </Button>
           </div>
@@ -924,7 +960,10 @@ export function WhazingPage() {
           </FormField>
           <FormField
             label={t("whazing.queueName", "Display name")}
-            description={t("whazing.queueNameHint", "Optional label for this queue.")}
+            description={t(
+              "whazing.queueNameHint",
+              "Optional label for this queue.",
+            )}
           >
             <Input
               value={inboxName}

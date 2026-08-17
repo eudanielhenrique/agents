@@ -13,7 +13,6 @@ import type {
 } from "./types";
 
 interface ToolsTabProps {
-  agentId: string;
   catalog: ToolCatalog;
   grants: GrantState[];
   onChange: React.Dispatch<React.SetStateAction<GrantState[]>>;
@@ -25,7 +24,9 @@ interface ToolsTabProps {
   kanbanInstructions: string;
   setKanbanInstructions: (v: string) => void;
   kanbanWhazingBoard: KanbanWhazingBoardState | null;
-  setKanbanWhazingBoard: React.Dispatch<React.SetStateAction<KanbanWhazingBoardState | null>>;
+  setKanbanWhazingBoard: React.Dispatch<
+    React.SetStateAction<KanbanWhazingBoardState | null>
+  >;
   whazingPix: WhazingPixUiState | null;
   setWhazingPix: React.Dispatch<React.SetStateAction<WhazingPixUiState | null>>;
   customAttributeInstructions: string;
@@ -60,7 +61,6 @@ interface ToolsTabProps {
 }
 
 export function ToolsTab({
-  agentId,
   catalog,
   grants,
   onChange,
@@ -127,7 +127,6 @@ export function ToolsTab({
         <SectionNav sections={sections} />
         <div className="flex min-w-0 grow flex-col gap-4">
           <ToolGrantsEditor
-            agentId={agentId}
             catalog={catalog}
             grants={grants}
             onChange={onChange}

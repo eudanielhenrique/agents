@@ -1,11 +1,11 @@
 import type { PrismaClient } from "@/../generated/prisma/client";
 import { decryptJson, encryptJson } from "@/api/lib/crypto";
 import basePrisma from "@/api/lib/prisma";
+import config from "@/config";
 import { AppError, NotFoundError } from "@/lib/errors";
 import { assertSafeOutboundUrl } from "@/lib/ssrf";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
 import { generateRouteToken } from "@/modules/webhooks/inbound/route-token";
-import config from "@/config";
 import { whazingWebhookUrl } from "./webhook-mount";
 
 // ── DTOs ─────────────────────────────────────────────────────────────────────

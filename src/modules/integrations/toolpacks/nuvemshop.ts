@@ -172,10 +172,7 @@ function buildOrderLookupTool(
 // ── product search ──
 
 const PRODUCT_SEARCH_SCHEMA = z.object({
-  query: z
-    .string()
-    .min(1)
-    .describe("Product name, tag, or SKU to search for."),
+  query: z.string().min(1).describe("Product name, tag, or SKU to search for."),
 });
 
 interface NuvemshopVariant {

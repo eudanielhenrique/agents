@@ -9,7 +9,6 @@ import config from "@/config";
 import { AppError, ForbiddenError } from "@/lib/errors";
 import { instanceIdentity } from "@/lib/instance";
 import { roleAtLeast, type TenantContext } from "@/lib/tenancy";
-import { createIntegrationInstance } from "@/modules/integrations/service";
 import {
   buildAuthorizeUrl,
   buildCallbackHtml,
@@ -17,6 +16,7 @@ import {
   decryptOAuthState,
   exchangeCodeForTokens,
 } from "@/modules/integrations/nuvemshop-oauth";
+import { createIntegrationInstance } from "@/modules/integrations/service";
 import { createVaultEntry } from "@/modules/vault/service";
 
 // Nuvemshop self-service "Connect" flow. Two controllers, mirroring oauth-google.controller.ts:
@@ -79,7 +79,8 @@ export const nuvemshopConnectController = new Elysia({
         name: t.String({
           minLength: 1,
           maxLength: 200,
-          description: "Display name for the integration instance to create on success.",
+          description:
+            "Display name for the integration instance to create on success.",
         }),
       }),
       response: errors(400, 401, 403),
@@ -202,7 +203,8 @@ export const nuvemshopCallbackController = new Elysia({
       query: t.Object({
         code: t.Optional(
           t.String({
-            description: "Nuvemshop OAuth authorization code to exchange for the access token.",
+            description:
+              "Nuvemshop OAuth authorization code to exchange for the access token.",
           }),
         ),
         state: t.Optional(
@@ -213,7 +215,8 @@ export const nuvemshopCallbackController = new Elysia({
         ),
         error: t.Optional(
           t.String({
-            description: "OAuth error code returned by Tiendanube when consent fails.",
+            description:
+              "OAuth error code returned by Tiendanube when consent fails.",
           }),
         ),
       }),

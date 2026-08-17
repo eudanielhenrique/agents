@@ -1,9 +1,6 @@
 import { decryptJson } from "@/api/lib/crypto";
 import { AppError } from "@/lib/errors";
-import {
-  buildOAuthCallbackHtml,
-  newNonce,
-} from "@/modules/vault/oauth-core";
+import { buildOAuthCallbackHtml, newNonce } from "@/modules/vault/oauth-core";
 
 // Nuvemshop/Tiendanube OAuth 2.0 mechanics for the self-service "Connect" flow (self-contained
 // here rather than under vault/ since — unlike google_oauth/mcp_oauth — the credential this mints

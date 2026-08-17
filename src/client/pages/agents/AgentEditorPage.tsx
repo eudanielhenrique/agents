@@ -6,9 +6,7 @@ import {
   Download,
   ListChecks,
   MessageSquare,
-  RadioTower,
   Settings2,
-  Share2,
   ShieldCheck,
   Sparkles,
   TriangleAlert,
@@ -228,7 +226,8 @@ function serializeHandoff(h: HandoffUiState): {
     // The account the target was picked from (account-scoped), so the runtime can validate it.
     targetInstanceId: h.mode === "pinned" ? h.targetInstanceId : null,
     instructions: h.instructions.trim() || null,
-    whazingQueueId: !isNaN(queueIdNum) && queueIdNum > 0 ? queueIdNum : null,
+    whazingQueueId:
+      !Number.isNaN(queueIdNum) && queueIdNum > 0 ? queueIdNum : null,
   };
 }
 
@@ -2394,7 +2393,6 @@ export function AgentEditorPage() {
 
             {tab === "tools" && (
               <ToolsTab
-                agentId={id}
                 catalog={catalog}
                 grants={grants}
                 onChange={setGrants}

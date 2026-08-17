@@ -444,7 +444,10 @@ export const v1Controller = new Elysia({ prefix: "/v1" })
       const ctx = ctxOrThrow(tenantContext);
       const { transport, id } = parseConvId(params.id);
       if (transport === "whazing") {
-        throw new AppError("reply not supported for Whazing conversations via the console", 400);
+        throw new AppError(
+          "reply not supported for Whazing conversations via the console",
+          400,
+        );
       }
       await replyToConversation(ctx, id, body.content, body.private ?? false);
       return { instance: instanceIdentity, success: true };
@@ -486,7 +489,10 @@ export const v1Controller = new Elysia({ prefix: "/v1" })
       const ctx = ctxOrThrow(tenantContext);
       const { transport, id } = parseConvId(params.id);
       if (transport === "whazing") {
-        throw new AppError("handoff not supported for Whazing conversations via the console", 400);
+        throw new AppError(
+          "handoff not supported for Whazing conversations via the console",
+          400,
+        );
       }
       await handoffConversation(ctx, id, body.assigneeId ?? null);
       return { instance: instanceIdentity, success: true };
@@ -523,7 +529,10 @@ export const v1Controller = new Elysia({ prefix: "/v1" })
       const ctx = ctxOrThrow(tenantContext);
       const { transport, id } = parseConvId(params.id);
       if (transport === "whazing") {
-        throw new AppError("return-to-agent not supported for Whazing conversations via the console", 400);
+        throw new AppError(
+          "return-to-agent not supported for Whazing conversations via the console",
+          400,
+        );
       }
       await returnConversationToAgent(ctx, id);
       return { instance: instanceIdentity, success: true };
@@ -552,7 +561,10 @@ export const v1Controller = new Elysia({ prefix: "/v1" })
       const ctx = ctxOrThrow(tenantContext);
       const { transport, id } = parseConvId(params.id);
       if (transport === "whazing") {
-        throw new AppError("reengage not supported for Whazing conversations via the console", 400);
+        throw new AppError(
+          "reengage not supported for Whazing conversations via the console",
+          400,
+        );
       }
       const { outcome } = await reengageConversation(ctx, id);
       return { instance: instanceIdentity, outcome };
@@ -581,7 +593,10 @@ export const v1Controller = new Elysia({ prefix: "/v1" })
       const ctx = ctxOrThrow(tenantContext);
       const { transport, id } = parseConvId(params.id);
       if (transport === "whazing") {
-        throw new AppError("status change not supported for Whazing conversations via the console", 400);
+        throw new AppError(
+          "status change not supported for Whazing conversations via the console",
+          400,
+        );
       }
       await setConversationStatus(ctx, id, body.status);
       return { instance: instanceIdentity, success: true };

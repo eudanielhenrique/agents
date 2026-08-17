@@ -82,14 +82,12 @@ export const whazingInboxesController = new Elysia({
         ),
         agentId: t.Optional(
           t.Union([t.String(), t.Null()], {
-            description: "Agent id (BigInt string) that answers this queue, or null.",
+            description:
+              "Agent id (BigInt string) that answers this queue, or null.",
           }),
         ),
       }),
-      detail: doc(
-        "Create Whazing inbox",
-        "Map a Whazing queue to an agent.",
-      ),
+      detail: doc("Create Whazing inbox", "Map a Whazing queue to an agent."),
       response: errors(400, 401, 403, 404),
     },
   )

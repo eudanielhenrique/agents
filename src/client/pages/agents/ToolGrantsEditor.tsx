@@ -101,8 +101,6 @@ const CHATWOOT_ONLY_TOOLS = new Set([
 ]);
 
 interface Props {
-  // The agent being edited — scopes the handoff target picker to the accounts it serves.
-  agentId: string;
   catalog: ToolCatalog;
   grants: GrantState[];
   onChange: (grants: GrantState[]) => void;
@@ -122,7 +120,9 @@ interface Props {
   // Whazing Kanban Pro board snapshot: which board + columns the agent operates on.
   // Null on Chatwoot agents (board is derived from the conversation at runtime).
   kanbanWhazingBoard: KanbanWhazingBoardState | null;
-  setKanbanWhazingBoard: React.Dispatch<React.SetStateAction<KanbanWhazingBoardState | null>>;
+  setKanbanWhazingBoard: React.Dispatch<
+    React.SetStateAction<KanbanWhazingBoardState | null>
+  >;
   // Operator-authored guidance for set_custom_attribute + assign_label (when to use each scope/label/
   // attribute), appended to their model-facing descriptions. Persisted in agent.settings.toolGuidance.
   customAttributeInstructions: string;
@@ -444,7 +444,6 @@ function ConfigurableToolCard({
 // Controlled editor for NATIVE / HTTP / MCP / INTEGRATION grants. RAG lives in
 // the Knowledge tab; this component preserves any RAG grant untouched.
 export function ToolGrantsEditor({
-  agentId,
   catalog,
   grants,
   onChange,
@@ -502,14 +501,17 @@ export function ToolGrantsEditor({
   const [columnsLoading, setColumnsLoading] = useState(false);
 
   // Load Whazing instances once (for the instance picker).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: fetch instances once on mount; selectedInstanceId is only read to decide auto-select, not to re-trigger the fetch
   useEffect(() => {
     api.api.v1.whazing.instances.get().then((res) => {
       if (res.data?.instances) {
         setWhazingInstances(
-          res.data.instances.map((i: { id: string | number; name: string }) => ({
-            id: String(i.id),
-            name: i.name,
-          })),
+          res.data.instances.map(
+            (i: { id: string | number; name: string }) => ({
+              id: String(i.id),
+              name: i.name,
+            }),
+          ),
         );
         // Auto-select the first instance if none saved.
         if (!selectedInstanceId && res.data.instances.length === 1) {
@@ -518,7 +520,6 @@ export function ToolGrantsEditor({
         }
       }
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Load boards when the selected instance changes.
@@ -530,7 +531,14 @@ export function ToolGrantsEditor({
       .instances({ id: selectedInstanceId })
       .kanban.boards.get()
       .then((res) => {
-        if (res.data?.boards) setBoardsList(res.data.boards as Array<{ id: number; name: string; color: string | null }>);
+        if (res.data?.boards)
+          setBoardsList(
+            res.data.boards as Array<{
+              id: number;
+              name: string;
+              color: string | null;
+            }>,
+          );
       })
       .finally(() => setBoardsLoading(false));
   }, [selectedInstanceId]);
@@ -547,7 +555,11 @@ export function ToolGrantsEditor({
             instanceId: selectedInstanceId,
             boardId,
             boardName,
-            columns: res.data.columns as Array<{ id: number; name: string; color: string | null }>,
+            columns: res.data.columns as Array<{
+              id: number;
+              name: string;
+              color: string | null;
+            }>,
           });
         }
       })
@@ -589,7 +601,9 @@ export function ToolGrantsEditor({
   const kanbanEnabled = selectedNative.has(KANBAN_TOOL);
   const kanbanEntry = visibleNative.find((n) => n.name === KANBAN_TOOL);
   const updateKanbanEnabled = selectedNative.has(UPDATE_KANBAN_TOOL);
-  const updateKanbanEntry = visibleNative.find((n) => n.name === UPDATE_KANBAN_TOOL);
+  const updateKanbanEntry = visibleNative.find(
+    (n) => n.name === UPDATE_KANBAN_TOOL,
+  );
   const pixEnabled = selectedNative.has(PIX_TOOL);
   const pixEntry = visibleNative.find((n) => n.name === PIX_TOOL);
   // Chatwoot-only tools: always null since filtered out; kept for type-safety in unused card guards.
@@ -606,9 +620,9 @@ export function ToolGrantsEditor({
       (handoff.instructions.trim() !== "" ||
         !transferWithSummary ||
         handoff.whazingQueueId.trim() !== "")) ||
-    (kanbanEnabled && (kanbanInstructions.trim() !== "" || kanbanWhazingBoard != null)) ||
+    (kanbanEnabled &&
+      (kanbanInstructions.trim() !== "" || kanbanWhazingBoard != null)) ||
     (pixEnabled && whazingPix != null);
-
 
   // Apply the deferred auto-grant for a just-created integration once it appears in the refreshed
   // catalog (so we can enable its full tool set, like the manual toggle does).
@@ -1259,7 +1273,9 @@ export function ToolGrantsEditor({
             icon={nativeToolMeta(KANBAN_TOOL, t).icon}
             title={nativeToolMeta(KANBAN_TOOL, t).label}
             description={nativeToolMeta(KANBAN_TOOL, t).description}
-            configured={kanbanInstructions.trim() !== "" || kanbanWhazingBoard != null}
+            configured={
+              kanbanInstructions.trim() !== "" || kanbanWhazingBoard != null
+            }
           >
             {/* Whazing Kanban Pro board picker */}
             <FormField
@@ -1329,7 +1345,9 @@ export function ToolGrantsEditor({
                 )}
               >
                 {columnsLoading ? (
-                  <p className="text-text-muted text-xs">{t("common.loading", "Loading…")}</p>
+                  <p className="text-text-muted text-xs">
+                    {t("common.loading", "Loading…")}
+                  </p>
                 ) : (
                   <div className="flex flex-col gap-1">
                     {kanbanWhazingBoard.columns.map((col) => (
@@ -1338,7 +1356,11 @@ export function ToolGrantsEditor({
                         className="flex items-center justify-between rounded-md border border-border bg-bg-tertiary px-3 py-1.5 text-xs"
                       >
                         <span className="text-text-primary">{col.name}</span>
-                        <span className="font-mono text-text-muted">ID: {col.id}</span>
+                        <span className="font-mono text-text-muted">
+                          {t("editor.kanbanColumnId", "ID: {{id}}", {
+                            id: col.id,
+                          })}
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -1481,7 +1503,10 @@ export function ToolGrantsEditor({
                     pixType: whazingPix?.pixType ?? "CNPJ",
                   })
                 }
-                placeholder={t("editor.pixKeyPlaceholder", "ex.: 11.071.697/0001-08")}
+                placeholder={t(
+                  "editor.pixKeyPlaceholder",
+                  "ex.: 11.071.697/0001-08",
+                )}
                 className="w-full rounded-lg border border-border bg-bg-secondary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50"
               />
             </FormField>
@@ -1496,7 +1521,10 @@ export function ToolGrantsEditor({
                     pixType: whazingPix?.pixType ?? "CNPJ",
                   })
                 }
-                placeholder={t("editor.pixNamePlaceholder", "ex.: Empresa Ltda")}
+                placeholder={t(
+                  "editor.pixNamePlaceholder",
+                  "ex.: Empresa Ltda",
+                )}
                 className="w-full rounded-lg border border-border bg-bg-secondary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50"
               />
             </FormField>
@@ -1511,11 +1539,17 @@ export function ToolGrantsEditor({
                   })
                 }
               >
-                <option value="CPF">CPF</option>
-                <option value="CNPJ">CNPJ</option>
-                <option value="PHONE">{t("editor.pixTypePhone", "Telefone")}</option>
-                <option value="EMAIL">{t("editor.pixTypeEmail", "E-mail")}</option>
-                <option value="EVP">{t("editor.pixTypeEvp", "Chave aleatória")}</option>
+                <option value="CPF">{t("editor.pixTypeCpf", "CPF")}</option>
+                <option value="CNPJ">{t("editor.pixTypeCnpj", "CNPJ")}</option>
+                <option value="PHONE">
+                  {t("editor.pixTypePhone", "Telefone")}
+                </option>
+                <option value="EMAIL">
+                  {t("editor.pixTypeEmail", "E-mail")}
+                </option>
+                <option value="EVP">
+                  {t("editor.pixTypeEvp", "Chave aleatória")}
+                </option>
               </Select>
             </FormField>
           </ConfigurableToolCard>

@@ -31,15 +31,24 @@ export const KANBAN_DEFAULTS: KanbanConfig = {
 function readWhazingBoard(v: unknown): KanbanWhazingBoard | null {
   if (!v || typeof v !== "object") return null;
   const b = v as Record<string, unknown>;
-  if (typeof b.boardId !== "number" || typeof b.boardName !== "string") return null;
+  if (typeof b.boardId !== "number" || typeof b.boardName !== "string")
+    return null;
   const instanceId = typeof b.instanceId === "string" ? b.instanceId : "";
   const cols = Array.isArray(b.columns)
-    ? b.columns
-        .filter((c): c is { id: number; name: string } =>
-          typeof c === "object" && c !== null && typeof c.id === "number" && typeof c.name === "string",
-        )
+    ? b.columns.filter(
+        (c): c is { id: number; name: string } =>
+          typeof c === "object" &&
+          c !== null &&
+          typeof c.id === "number" &&
+          typeof c.name === "string",
+      )
     : [];
-  return { instanceId, boardId: b.boardId, boardName: b.boardName, columns: cols };
+  return {
+    instanceId,
+    boardId: b.boardId,
+    boardName: b.boardName,
+    columns: cols,
+  };
 }
 
 export function readKanbanConfig(settings: unknown): KanbanConfig {

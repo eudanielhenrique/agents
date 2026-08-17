@@ -208,7 +208,11 @@ describe.skipIf(!dbUp)("MCP agent-builder tools (DB)", () => {
       p,
       {
         name: "Snake Case Agent",
-        model_config: { provider: "openai", model: "gpt-4o-mini", credential_ref: "my-api" },
+        model_config: {
+          provider: "openai",
+          model: "gpt-4o-mini",
+          credential_ref: "my-api",
+        },
         dry_run: false,
       },
       { base: appDb },
