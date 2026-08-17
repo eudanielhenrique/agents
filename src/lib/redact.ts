@@ -24,7 +24,13 @@ const SECRET_VALUE_PATTERNS: RegExp[] = [
 const SECRET_KEY_RE =
   /(?:access[_-]?token|api[_-]?key|client[_-]?secret|password|authorization|secret|credential)/i;
 
-const MAX_STRING = 2000;
+// 2000 used to be the whole budget: execution_logs had no retention, so every byte kept forever had
+// to be rationed, and the cut landed right where a real system prompt gets interesting (the appended
+// <attribute_values>/MCP-context blocks an operator most needs to audit). FLOWLOG_SWEEP now bounds
+// the table to config.flowlog.retentionDays regardless of row size, so the budget is per-row disk
+// within a bounded window, not per-row disk forever — 16000 chars comfortably covers a real agent's
+// full system prompt without truncation, at a modest, time-bounded cost.
+const MAX_STRING = 16_000;
 const MAX_ARRAY = 50;
 const MAX_DEPTH = 6;
 
