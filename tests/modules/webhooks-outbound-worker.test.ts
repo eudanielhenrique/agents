@@ -4,6 +4,9 @@ import { PrismaClient } from "@/../generated/prisma/client";
 import { encryptJson } from "@/api/lib/crypto";
 import {
   DELIVERY_HEADER,
+  LEGACY_DELIVERY_HEADER,
+  LEGACY_SIGNATURE_HEADER,
+  LEGACY_TIMESTAMP_HEADER,
   SIGNATURE_HEADER,
   TIMESTAMP_HEADER,
   verifyOutboundSignature,
@@ -141,6 +144,7 @@ describe.skipIf(!dbUp)("outbound delivery worker", () => {
     const { fetchImpl } = stubFetch(200);
     const summary = await processOutboundBatch({
       base: appDb,
+      tenantId,
       fetchImpl,
       assertSafe: passthroughSafe,
     });
@@ -157,6 +161,7 @@ describe.skipIf(!dbUp)("outbound delivery worker", () => {
     const { fetchImpl, calls } = stubFetch(200);
     await processOutboundBatch({
       base: appDb,
+      tenantId,
       fetchImpl,
       assertSafe: passthroughSafe,
     });
@@ -180,11 +185,44 @@ describe.skipIf(!dbUp)("outbound delivery worker", () => {
     expect(await readDelivery(id)).toMatchObject({ status: "DELIVERED" });
   });
 
+  // Brand rename compatibility window, asserted on what actually leaves the worker: an operator's
+  // receiver is keyed on the pre-rename header names and we cannot reach it to reconfigure. Both
+  // sets must be on the wire, with identical values. Dropped at 2.0.
+  test("puts both the current and the pre-rename header names on the wire", async () => {
+    const id = await seedDelivery({ subscriptionId: signedSubId });
+    const { fetchImpl, calls } = stubFetch(200);
+    await processOutboundBatch({
+      base: appDb,
+      tenantId,
+      fetchImpl,
+      assertSafe: passthroughSafe,
+    });
+    const call = calls.find(
+      (c) =>
+        (c.init?.headers as Record<string, string>)?.[DELIVERY_HEADER] ===
+        String(id),
+    );
+    const headers = call?.init?.headers as Record<string, string>;
+    expect(headers[LEGACY_DELIVERY_HEADER]).toBe(String(id));
+    expect(headers[LEGACY_SIGNATURE_HEADER]).toBe(headers[SIGNATURE_HEADER]);
+    expect(headers[LEGACY_TIMESTAMP_HEADER]).toBe(headers[TIMESTAMP_HEADER]);
+    // A receiver still verifying under the old names gets a signature that checks out.
+    expect(
+      verifyOutboundSignature(
+        SECRET,
+        Number(headers[LEGACY_TIMESTAMP_HEADER]),
+        call?.init?.body as string,
+        headers[LEGACY_SIGNATURE_HEADER] ?? "",
+      ),
+    ).toBe(true);
+  });
+
   test("retries a non-2xx response with backoff", async () => {
     const id = await seedDelivery({ subscriptionId: unsignedSubId });
     const { fetchImpl } = stubFetch(500);
     await processOutboundBatch({
       base: appDb,
+      tenantId,
       fetchImpl,
       assertSafe: passthroughSafe,
     });
@@ -204,6 +242,7 @@ describe.skipIf(!dbUp)("outbound delivery worker", () => {
     const { fetchImpl } = stubFetch(503);
     await processOutboundBatch({
       base: appDb,
+      tenantId,
       fetchImpl,
       assertSafe: passthroughSafe,
     });
@@ -217,6 +256,7 @@ describe.skipIf(!dbUp)("outbound delivery worker", () => {
     const { fetchImpl, calls } = stubFetch(200);
     await processOutboundBatch({
       base: appDb,
+      tenantId,
       fetchImpl,
       assertSafe: passthroughSafe,
     });
@@ -242,7 +282,7 @@ describe.skipIf(!dbUp)("outbound delivery worker", () => {
     const id = await seedDelivery({ subscriptionId: blockedSub.id });
     const { fetchImpl, calls } = stubFetch(200);
     // Real SSRF guard (not the passthrough): the metadata/loopback URL must be rejected.
-    await processOutboundBatch({ base: appDb, fetchImpl });
+    await processOutboundBatch({ base: appDb, tenantId, fetchImpl });
     expect(calls.length).toBe(0); // never reached fetch
     const row = await readDelivery(id);
     expect(row.status).toBe("DEAD");
@@ -261,6 +301,7 @@ describe.skipIf(!dbUp)("outbound delivery worker", () => {
     const { fetchImpl } = stubFetch(200);
     const summary = await processOutboundBatch({
       base: appDb,
+      tenantId,
       fetchImpl,
       assertSafe: passthroughSafe,
       staleMs: 60_000,

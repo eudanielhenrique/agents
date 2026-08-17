@@ -12,6 +12,8 @@ import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Button,
+  ConfirmDialog,
+  type ConfirmPayload,
   CredentialPicker,
   FormField,
   Input,
@@ -59,6 +61,10 @@ function serviceFor(catalogType: string): string {
   }
 }
 
+// Mirrors MAX_BLOCKING_CALENDARS in the google-calendar toolpack: past this, availability refuses
+// (fail-closed), so the picker warns before the operator saves a config the runtime will reject.
+const BLOCKING_CALENDARS_LIMIT = 10;
+
 // Appointment sizing options (minutes), mirroring the n8n v3 allowlist. Duration = the appointment
 // length; granularity = the spacing between candidate start times (15 ⇒ 09:00 and 09:15 both offered).
 const SLOT_DURATIONS = [15, 20, 30, 45, 60, 90, 120] as const;
@@ -98,10 +104,12 @@ function defaultConfig(catalogType: string): Record<string, unknown> {
       return {
         calendarIds: [],
         calendarLabels: {},
+        blockingCalendarIds: [],
         timeZone: "America/Sao_Paulo",
         businessHoursId: "",
         slotDurationMinutes: 30,
         slotGranularityMinutes: 15,
+        createMeetLink: true,
         appointmentReminders: {
           enabled: false,
           offsetsHours: [24, 1],
@@ -344,6 +352,114 @@ function ReminderConfigEditor({
   );
 }
 
+// A multi-select over the credential's fetched calendars plus hand-typed ids (shared calendars the
+// list does not return). Shared by the allowed-calendars and blocking-calendars pickers; the parent
+// owns the selection semantics (which config key, whether labels are captured).
+function CalendarMultiPicker({
+  cals,
+  selectedIds,
+  onToggle,
+  manualIds,
+  onManualChange,
+}: {
+  cals: { id: string; summary: string; primary?: boolean }[];
+  selectedIds: string[];
+  onToggle: (cal: { id: string; summary: string }, on: boolean) => void;
+  manualIds: string[];
+  onManualChange: (next: string[]) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col gap-2">
+      {cals.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          {cals.map((c) => {
+            const checked = selectedIds.includes(c.id);
+            return (
+              <button
+                key={c.id}
+                type="button"
+                aria-pressed={checked}
+                onClick={() => onToggle(c, !checked)}
+                className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition-colors ${
+                  checked
+                    ? "border-accent bg-accent-soft"
+                    : "border-border hover:bg-bg-hover"
+                }`}
+              >
+                <span
+                  className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                    checked
+                      ? "border-accent bg-accent text-accent-foreground"
+                      : "border-border"
+                  }`}
+                >
+                  {checked && <Check className="h-3 w-3" aria-hidden="true" />}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium text-sm text-text-primary">
+                    {c.summary}
+                    {c.primary && (
+                      <span className="ml-1.5 text-text-muted text-xs">
+                        {t("integrations.config.calendarPrimary", "(primary)")}
+                      </span>
+                    )}
+                  </span>
+                  <span className="block truncate text-text-muted text-xs">
+                    {c.id}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {/* Advanced: shared calendars not returned by the list, typed by id. */}
+      {manualIds.map((id, i) => (
+        <div
+          // biome-ignore lint/suspicious/noArrayIndexKey: editable free-text rows; the index is the stable identity (the value changes as the operator types)
+          key={`cal-${i}`}
+          className="flex items-center gap-2"
+        >
+          <Input
+            value={id}
+            placeholder={t(
+              "integrations.config.calendarPlaceholder",
+              "Calendar ID (e.g. team@group.calendar.google.com)",
+            )}
+            aria-label={t(
+              "integrations.config.calendarManualAria",
+              "Manual calendar ID {{index}}",
+              { index: i + 1 },
+            )}
+            onChange={(e) => {
+              const next = [...manualIds];
+              next[i] = e.target.value;
+              onManualChange(next);
+            }}
+          />
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => onManualChange(manualIds.filter((_, j) => j !== i))}
+            aria-label={t("common.remove", "Remove")}
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        </div>
+      ))}
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => onManualChange([...manualIds, ""])}
+      >
+        <Plus className="h-4 w-4" aria-hidden="true" />
+        {t("integrations.config.addCalendarById", "Add by ID")}
+      </Button>
+    </div>
+  );
+}
+
 function emptyForm(): Form {
   return {
     catalogType: "",
@@ -432,6 +548,16 @@ export function IntegrationEditModal({
   };
   const { showToast } = useToast();
   const tokenModal = useModalController<{ url: string }>();
+  const rotateConfirm = useModalController<ConfirmPayload>();
+  // NOTE: The instance's inbound webhook token, read back on edit so the operator can copy the URL
+  // again. When it is null the STATUS says why: "absent" (nothing was ever stored — an instance
+  // older than this feature) vs "unreadable" (a blob the key can no longer decrypt). Both are fixed
+  // by rotating, but pointing at the wrong cause sends the operator hunting in the wrong place.
+  const [routeToken, setRouteToken] = useState<string | null>(null);
+  const [routeTokenStatus, setRouteTokenStatus] = useState<
+    "present" | "absent" | "unreadable"
+  >("absent");
+  const [rotating, setRotating] = useState(false);
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [form, setForm] = useState<Form>(emptyForm());
   const [saving, setSaving] = useState(false);
@@ -565,6 +691,8 @@ export function IntegrationEditModal({
               setCatalog(list);
               return list;
             })();
+        setRouteToken(null);
+        setRouteTokenStatus("absent");
         if (!payloadId) {
           const first = catList[0];
           const ct = first?.catalogType ?? "";
@@ -601,6 +729,8 @@ export function IntegrationEditModal({
           inboundSecretRef: inst.inboundSecretRef ?? "",
         };
         setForm(next);
+        setRouteToken(inst.routeToken);
+        setRouteTokenStatus(inst.routeTokenStatus);
         formBaseline.current = JSON.stringify(next);
         syncSlotModes(next.config);
         // Pre-load the credential's calendars/folders so the picker reflects the saved selection.
@@ -776,6 +906,52 @@ export function IntegrationEditModal({
     }
   }
 
+  const inboundUrl = (token: string) =>
+    `${window.location.origin}/api/v1/integrations/inbound/${token}`;
+
+  function copyInboundUrl() {
+    if (!routeToken) return;
+    void navigator.clipboard?.writeText(inboundUrl(routeToken));
+    showToast(t("common.copied", "Copied"), "success");
+  }
+
+  // NOTE: Rotation is destructive from the provider's point of view — the old URL stops resolving
+  // the moment this commits, so the confirm spells that out instead of a generic "are you sure".
+  function askRotate() {
+    rotateConfirm.open({
+      title: t("integrations.webhook.rotateTitle", "Generate a new URL"),
+      message: t(
+        "integrations.webhook.rotateMessage",
+        "The current URL stops working immediately. You must paste the new one into the provider's panel, or payment notifications stop arriving.",
+      ),
+      danger: true,
+      confirmLabel: t("integrations.webhook.rotateConfirm", "Generate"),
+      onConfirm: async () => {
+        if (!editId) return;
+        setRotating(true);
+        try {
+          const { data, error } = await api.api.v1.integrations
+            .instances({ id: editId })
+            ["route-token"].post();
+          if (error || !data) throw error ?? new Error("no data");
+          setRouteToken(data.routeToken);
+          tokenModal.open({ url: inboundUrl(data.routeToken) });
+        } catch (e) {
+          showToast(
+            t("integrations.webhook.rotateError", "Could not generate."),
+            "error",
+          );
+          // NOTE: Rethrow — ConfirmDialog's contract is that a throwing onConfirm keeps the dialog
+          // open (the caller owns the toast). Swallowing it closes the dialog on failure, which
+          // reads as "done" for an action that did not happen.
+          throw e;
+        } finally {
+          setRotating(false);
+        }
+      },
+    });
+  }
+
   const selectedCatalog = catalog.find(
     (c) => c.catalogType === form.catalogType,
   );
@@ -795,6 +971,11 @@ export function IntegrationEditModal({
   // Calendars in the allowlist that aren't in the fetched list (e.g. a shared calendar typed by hand)
   // stay editable via the advanced manual rows.
   const manualCalIds = calendarIds.filter((id) => !pickedCalIds.has(id));
+  // Blocking calendars: respected by availability (every event blocks slots) but never operated on.
+  const blockingIds = Array.isArray(cfg.blockingCalendarIds)
+    ? (cfg.blockingCalendarIds as string[])
+    : [];
+  const manualBlockingIds = blockingIds.filter((id) => !pickedCalIds.has(id));
   // Drive: the search-scope folder (a single optional id) + its captured friendly name.
   const folderId = typeof cfg.folderId === "string" ? cfg.folderId : "";
   const folderName = typeof cfg.folderName === "string" ? cfg.folderName : "";
@@ -836,6 +1017,21 @@ export function IntegrationEditModal({
   function setManualCalIds(next: string[]) {
     const picked = calendarIds.filter((id) => pickedCalIds.has(id));
     setCfg({ calendarIds: [...picked, ...next] });
+  }
+
+  // Blocking-calendar selection: ids only (labels are never used at runtime for these).
+  function toggleBlockingCalendar(c: { id: string }, on: boolean) {
+    const ids = on
+      ? blockingIds.includes(c.id)
+        ? blockingIds
+        : [...blockingIds, c.id]
+      : blockingIds.filter((x) => x !== c.id);
+    setCfg({ blockingCalendarIds: ids });
+  }
+
+  function setManualBlockingIds(next: string[]) {
+    const picked = blockingIds.filter((id) => pickedCalIds.has(id));
+    setCfg({ blockingCalendarIds: [...picked, ...next] });
   }
 
   const isDirty =
@@ -1075,7 +1271,7 @@ export function IntegrationEditModal({
                       <p className="mb-1.5 text-text-muted text-xs">
                         {t(
                           "integrations.config.calendarsHint",
-                          "The calendars the agent may read and write. Leave empty to use the connected account's primary calendar.",
+                          "The calendars the agent may read and write. The calendar tools stay disabled until at least one is picked.",
                         )}
                       </p>
                       <a
@@ -1126,115 +1322,77 @@ export function IntegrationEditModal({
                           </div>
                           {calLoading ? (
                             <Skeleton className="h-20 w-full" />
-                          ) : calError ? (
+                          ) : (
+                            <>
+                              {calError && (
+                                <p className="text-error text-xs">
+                                  {t(
+                                    "integrations.config.calendarsError",
+                                    "Could not list calendars. Check the credential's Calendar scope and try again.",
+                                  )}
+                                </p>
+                              )}
+                              <CalendarMultiPicker
+                                cals={calError ? [] : availableCals}
+                                selectedIds={calendarIds}
+                                onToggle={toggleCalendar}
+                                manualIds={manualCalIds}
+                                onManualChange={setManualCalIds}
+                              />
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </FormField>
+                    <FormField
+                      label={t(
+                        "integrations.config.blockingCalendars",
+                        "Blocking calendars",
+                      )}
+                      group
+                    >
+                      <p className="mb-1.5 text-text-muted text-xs">
+                        {t(
+                          "integrations.config.blockingCalendarsHint",
+                          "Calendars the agent respects but never books into: every event on them blocks availability (holidays, closures, days off). The agent never sees their event details.",
+                        )}
+                      </p>
+                      {!form.credentialRef ? (
+                        <p className="rounded-lg border border-border border-dashed px-3 py-2 text-text-muted text-xs">
+                          {t(
+                            "integrations.config.calendarsPickCredential",
+                            "Choose a connected Google credential above to list its calendars.",
+                          )}
+                        </p>
+                      ) : calLoading ? (
+                        <Skeleton className="h-20 w-full" />
+                      ) : (
+                        <>
+                          {blockingIds.length > BLOCKING_CALENDARS_LIMIT && (
+                            <p className="text-warning text-xs">
+                              {t(
+                                "integrations.config.blockingCalendarsLimitWarning",
+                                "More than {{max}} blocking calendars are selected; availability checks will refuse until the list is reduced.",
+                                { max: BLOCKING_CALENDARS_LIMIT },
+                              )}
+                            </p>
+                          )}
+                          {calError && (
                             <p className="text-error text-xs">
                               {t(
                                 "integrations.config.calendarsError",
                                 "Could not list calendars. Check the credential's Calendar scope and try again.",
                               )}
                             </p>
-                          ) : (
-                            availableCals.length > 0 && (
-                              <div className="flex flex-col gap-1.5">
-                                {availableCals.map((c) => {
-                                  const checked = calendarIds.includes(c.id);
-                                  return (
-                                    <button
-                                      key={c.id}
-                                      type="button"
-                                      aria-pressed={checked}
-                                      onClick={() =>
-                                        toggleCalendar(c, !checked)
-                                      }
-                                      className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition-colors ${
-                                        checked
-                                          ? "border-accent bg-accent-soft"
-                                          : "border-border hover:bg-bg-hover"
-                                      }`}
-                                    >
-                                      <span
-                                        className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                                          checked
-                                            ? "border-accent bg-accent text-accent-foreground"
-                                            : "border-border"
-                                        }`}
-                                      >
-                                        {checked && (
-                                          <Check
-                                            className="h-3 w-3"
-                                            aria-hidden="true"
-                                          />
-                                        )}
-                                      </span>
-                                      <span className="min-w-0 flex-1">
-                                        <span className="block truncate font-medium text-sm text-text-primary">
-                                          {c.summary}
-                                          {c.primary && (
-                                            <span className="ml-1.5 text-text-muted text-xs">
-                                              {t(
-                                                "integrations.config.calendarPrimary",
-                                                "(primary)",
-                                              )}
-                                            </span>
-                                          )}
-                                        </span>
-                                        <span className="block truncate text-text-muted text-xs">
-                                          {c.id}
-                                        </span>
-                                      </span>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            )
                           )}
-                          {/* Advanced: shared calendars not returned by the list, typed by id. */}
-                          {manualCalIds.map((id, i) => (
-                            <div
-                              // biome-ignore lint/suspicious/noArrayIndexKey: editable free-text rows; the index is the stable identity (the value changes as the operator types)
-                              key={`cal-${i}`}
-                              className="flex items-center gap-2"
-                            >
-                              <Input
-                                value={id}
-                                placeholder={t(
-                                  "integrations.config.calendarPlaceholder",
-                                  "Calendar ID (e.g. team@group.calendar.google.com)",
-                                )}
-                                onChange={(e) => {
-                                  const next = [...manualCalIds];
-                                  next[i] = e.target.value;
-                                  setManualCalIds(next);
-                                }}
-                              />
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                onClick={() =>
-                                  setManualCalIds(
-                                    manualCalIds.filter((_, j) => j !== i),
-                                  )
-                                }
-                                aria-label={t("common.remove", "Remove")}
-                              >
-                                <X className="h-4 w-4" aria-hidden="true" />
-                              </Button>
-                            </div>
-                          ))}
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() =>
-                              setManualCalIds([...manualCalIds, ""])
-                            }
-                          >
-                            <Plus className="h-4 w-4" aria-hidden="true" />
-                            {t(
-                              "integrations.config.addCalendarById",
-                              "Add by ID",
-                            )}
-                          </Button>
-                        </div>
+                          <CalendarMultiPicker
+                            cals={calError ? [] : availableCals}
+                            selectedIds={blockingIds}
+                            onToggle={toggleBlockingCalendar}
+                            manualIds={manualBlockingIds}
+                            onManualChange={setManualBlockingIds}
+                          />
+                        </>
                       )}
                     </FormField>
                     <FormField
@@ -1454,6 +1612,20 @@ export function IntegrationEditModal({
                       {t(
                         "integrations.config.slotSpacingHint",
                         "Spacing is the gap between offered start times: 15 min means 09:00 and 09:15 can both be offered.",
+                      )}
+                    </p>
+                    <SwitchField
+                      checked={cfg.createMeetLink !== false}
+                      onCheckedChange={(v) => setCfg({ createMeetLink: v })}
+                      label={t(
+                        "integrations.config.createMeetLink",
+                        "Create a Google Meet room for each appointment",
+                      )}
+                    />
+                    <p className="text-text-muted text-xs">
+                      {t(
+                        "integrations.config.createMeetLinkHint",
+                        "The agent then shares the Meet link with the customer. Turn it off if this calendar is only used to block time slots.",
                       )}
                     </p>
                   </div>
@@ -1691,6 +1863,61 @@ export function IntegrationEditModal({
                     "When a charge is paid, Asaas calls this webhook and the agent is woken on the exact conversation that generated the charge. It then decides whether to message the customer (and may use its tools). You paste the webhook URL into the Asaas panel after saving.",
                   )}
                 </p>
+                {/* The URL only exists once the instance does, so it shows on edit, never create. */}
+                {editId && (
+                  <FormField
+                    label={t("integrations.webhook.url", "Webhook URL")}
+                    group
+                    description={
+                      routeToken
+                        ? t(
+                            "integrations.webhook.urlHint",
+                            "Paste this into the provider's panel.",
+                          )
+                        : routeTokenStatus === "unreadable"
+                          ? t(
+                              "integrations.webhook.urlUnreadable",
+                              "The stored URL can no longer be decrypted, which usually means the encryption key changed. Generate a new one and update it in the provider's panel.",
+                            )
+                          : t(
+                              "integrations.webhook.urlMissing",
+                              "This integration was created before the URL could be shown again, so we no longer have it. Generate a new one and update it in the provider's panel.",
+                            )
+                    }
+                  >
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                      {routeToken && (
+                        <>
+                          <Input
+                            readOnly
+                            value={inboundUrl(routeToken)}
+                            onFocus={(e) => e.currentTarget.select()}
+                            aria-label={t(
+                              "integrations.webhook.url",
+                              "Webhook URL",
+                            )}
+                            className="font-mono text-xs"
+                          />
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            onClick={copyInboundUrl}
+                          >
+                            {t("common.copy", "Copy")}
+                          </Button>
+                        </>
+                      )}
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        loading={rotating}
+                        onClick={askRotate}
+                      >
+                        {t("integrations.webhook.rotate", "Generate new URL")}
+                      </Button>
+                    </div>
+                  </FormField>
+                )}
                 <SwitchField
                   checked={cfg.notifyOnPayment !== false}
                   onCheckedChange={(v) => setCfg({ notifyOnPayment: v })}
@@ -1764,7 +1991,7 @@ export function IntegrationEditModal({
           <p className="text-sm text-text-secondary">
             {t(
               "integrations.tokenHint",
-              "Copy this URL into the provider's webhook settings. It is shown only once.",
+              "Copy this URL into the provider's webhook settings. You can read it again later by editing this integration.",
             )}
           </p>
           <div className="flex items-center gap-2">
@@ -1778,6 +2005,8 @@ export function IntegrationEditModal({
           </div>
         </div>
       </Modal>
+
+      <ConfirmDialog modal={rotateConfirm} />
     </>
   );
 }

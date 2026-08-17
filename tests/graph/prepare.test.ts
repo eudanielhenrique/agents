@@ -6,6 +6,7 @@ import type { AgentConfig } from "@/graph/prepare";
 import { buildModelAndGraph } from "@/graph/prepare";
 import { GUARDRAILS_DEFAULTS } from "@/modules/guardrails/settings";
 import { HANDOFF_DEFAULTS } from "@/modules/handoff/settings";
+import { SEND_IMAGE_DEFAULTS } from "@/modules/images/settings";
 import { KANBAN_DEFAULTS } from "@/modules/kanban/settings";
 import { SERVICE_WINDOW_DEFAULTS } from "@/modules/service-window/service";
 import { SPLIT_DEFAULTS } from "@/modules/split/service";
@@ -21,6 +22,7 @@ function makeConfig(
     agentBotToken: null,
     conversationDbId: null,
     inboxDbId: null,
+    channelType: null,
     contactDbId: null,
     contactInboxId: null,
     systemPrompt: "Você é um assistente.",
@@ -45,6 +47,7 @@ function makeConfig(
     splitConfig: SPLIT_DEFAULTS,
     serviceWindowConfig: SERVICE_WINDOW_DEFAULTS,
     handoffConfig: HANDOFF_DEFAULTS,
+    sendImageConfig: SEND_IMAGE_DEFAULTS,
     kanbanConfig: KANBAN_DEFAULTS,
     pixConfig: null,
     toolGuidance: {},
@@ -52,6 +55,7 @@ function makeConfig(
     contactName: null,
     timezone: "America/Sao_Paulo",
     maxToolCalls: 10,
+    logToolValues: false,
     ...over,
   } as AgentConfig;
 }

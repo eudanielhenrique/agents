@@ -2,6 +2,7 @@ import { Elysia, t } from "elysia";
 import { getUserById, verifyPassword } from "@/api/features/auth/auth.service";
 import { doc, errors } from "@/api/lib/openapi";
 import { tenancyPlugin } from "@/api/middlewares/tenancy";
+import config from "@/config";
 import {
   AppError,
   ForbiddenError,
@@ -53,6 +54,7 @@ import { listTtsOptions } from "@/modules/tts/listing";
 // translate('errors.baseUrlRequired', 'A base URL is required for this provider.')
 // translate('errors.credentialRequired', 'A credential is required to list provider models.')
 // translate('errors.fileTooLarge', 'File is too large')
+// translate('errors.promptTooLong', 'System prompt is too long: {{len}} characters (limit {{max}}).')
 // translate('errors.providerModelsFailed', 'Failed to retrieve model list from provider.')
 // translate('errors.unknownProvider', 'Unknown model provider.')
 // translate('errors.unsupportedAudioType', 'Unsupported audio type')
@@ -99,7 +101,9 @@ export function splitAgentUpdateBody(
 // Live, non-persisted playground override (the "edit live" popup): the unsaved prompt/model/settings
 // draft. The secret never travels — modelConfig carries only a credentialRef, resolved server-side.
 const playgroundDraftSchema = t.Object({
-  systemPrompt: t.Optional(t.String({ maxLength: 50_000 })),
+  systemPrompt: t.Optional(
+    t.String({ maxLength: config.agent.promptMaxChars }),
+  ),
   modelConfig: t.Optional(t.Record(t.String(), t.Unknown())),
   settings: t.Optional(t.Record(t.String(), t.Unknown())),
   // Playground tool-simulation: tool name → canned result (overrides any real/simulated execution).
@@ -280,9 +284,9 @@ export const agentsController = new Elysia({
         }),
         systemPrompt: t.Optional(
           t.String({
-            maxLength: 50_000,
-            description:
-              "System prompt template, may contain {{variable}} placeholders.",
+            // NOTE: no maxLength here — the service enforces the (env-configurable) cap and
+            // raises the localized error; a TypeBox cap would 422 first with a raw message.
+            description: `System prompt template, may contain {{variable}} placeholders (up to ${config.agent.promptMaxChars} characters).`,
           }),
         ),
         enabled: t.Optional(
@@ -306,7 +310,7 @@ export const agentsController = new Elysia({
         modelConfig: t.Optional(
           t.Record(t.String(), t.Unknown(), {
             description:
-              "Model settings (provider, model, credentialRef, etc.); secrets are referenced, never inlined.",
+              "Model settings (provider, model, credentialRef, temperature, reasoningEffort, etc.); secrets are referenced, never inlined.",
           }),
         ),
         settings: t.Optional(
@@ -366,9 +370,9 @@ export const agentsController = new Elysia({
         ),
         systemPrompt: t.Optional(
           t.String({
-            maxLength: 50_000,
-            description:
-              "System prompt template, may contain {{variable}} placeholders.",
+            // NOTE: no maxLength here — the service enforces the (env-configurable) cap and
+            // raises the localized error; a TypeBox cap would 422 first with a raw message.
+            description: `System prompt template, may contain {{variable}} placeholders (up to ${config.agent.promptMaxChars} characters).`,
           }),
         ),
         enabled: t.Optional(
@@ -392,7 +396,7 @@ export const agentsController = new Elysia({
         modelConfig: t.Optional(
           t.Record(t.String(), t.Unknown(), {
             description:
-              "Model settings (provider, model, credentialRef, etc.); secrets are referenced, never inlined.",
+              "Model settings (provider, model, credentialRef, temperature, reasoningEffort, etc.); secrets are referenced, never inlined.",
           }),
         ),
         settings: t.Optional(

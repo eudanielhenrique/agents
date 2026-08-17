@@ -38,7 +38,12 @@ import {
   clearConversationError,
   recordConversationError,
 } from "@/modules/conversations/error";
+import {
+  announceFailedTurn,
+  readDirectFence,
+} from "@/modules/conversations/failure-note";
 import { armDebounce, resolveDebounceConfig } from "@/modules/debounce/service";
+import { advanceHandledWatermark } from "@/modules/debounce/watermark";
 import { cancelPendingJob } from "@/modules/scheduler/service";
 import {
   resolveSttConfig,
@@ -49,14 +54,17 @@ import {
   resolveVisionConfig,
 } from "@/modules/vision/service";
 import { hashRouteToken } from "@/modules/webhooks/inbound/route-token";
+import type { ChatwootClient } from "./client";
 import { loadAgentBot, loadChatwootClient } from "./instance";
 import { mirrorChatwootEvent } from "./mirror";
 import {
   type ControlCommand,
   controlCommand,
   firstAudioAttachment,
+  firstLocationAttachment,
   firstVisualAttachment,
   isHumanAgentMessage,
+  isIncomingMessage,
   isNewIncomingMessage,
   normalizeChatwootEvent,
   shouldBotHandle,
@@ -305,6 +313,46 @@ function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+// A few Chatwoot transports persist the attachment only after creating the message. In that shape,
+// message_created arms the turn without media and message_updated is the first event that carries
+// the audio (the fork re-fires the update after a late audio attach). Analyze that late audio, but
+// never let the update drive debounce or a second turn. The STT write-back update is a no-op because
+// it carries `transcribed_text` in the payload. AUDIO ONLY on purpose: the vision write-back is not
+// serialized into webhook payloads (the fork's Attachment#push_event_data exposes no
+// image_description/extracted_text on any file type), so a visual leg here could not tell "never
+// analyzed" from "our own write-back" and would re-run vision on its own write-back event forever.
+export function hasPendingInboundMediaUpdate(
+  n: NormalizedChatwootEvent,
+): boolean {
+  if (n.event !== "message_updated" || !isIncomingMessage(n)) return false;
+  const audio = firstAudioAttachment(n);
+  return Boolean(
+    audio && !audio.transcribedText && !n.message?.transcribedText,
+  );
+}
+
+async function isTestConversationActivated(params: {
+  tenantId: bigint;
+  instanceId: bigint;
+  conversationId: number | null;
+  base: PrismaClient;
+}): Promise<boolean> {
+  if (params.conversationId === null) return false;
+  const row = await runScopedOn(params.base, sysCtx(params.tenantId), (db) =>
+    db.conversation.findUnique({
+      where: {
+        tenantId_chatwootInstanceId_chatwootConversationId: {
+          tenantId: params.tenantId,
+          chatwootInstanceId: params.instanceId,
+          chatwootConversationId: params.conversationId as number,
+        },
+      },
+      select: { testActivatedAt: true },
+    }),
+  );
+  return row?.testActivatedAt != null;
+}
+
 // Eager media analysis: transcribe an incoming voice note (STT) and extract an incoming image/document
 // (vision) BEFORE arming/answering, writing the result back to Chatwoot and stashing it on the
 // in-memory event (the direct path reads it; the debounce flush re-reads from the attachment meta).
@@ -483,6 +531,7 @@ async function ingestUnhandledMessage(args: {
     attachmentTypes: (n.message.attachments ?? [])
       .map((a) => a.fileType)
       .filter((t): t is string => t !== null),
+    location: firstLocationAttachment(n.message.attachments),
     inReplyTo: n.message.inReplyTo,
   });
   if (!text.trim()) return;
@@ -612,17 +661,24 @@ async function maybeConsumeCommandOrGate(params: {
   });
   if (!ctx) return false;
 
-  // A persona-bot client to ACK as the agent (bot token). Labels use the admin token regardless.
+  // A client that acts AS the persona bound to this conversation's inbox. Every bot-token endpoint
+  // (send, private note, custom attributes) authenticates with it; admin-token ones (labels, kanban)
+  // ignore it. Building the client without resolving the bot yields an empty token, which Chatwoot
+  // rejects with 401 — issue #79, where /reset did exactly that and reported success anyway.
+  const personaClient = async (): Promise<ChatwootClient> => {
+    const bot =
+      ctx.agentId !== null
+        ? await loadAgentBot(tenantId, instanceId, ctx.agentId, base)
+        : null;
+    return loadChatwootClient(tenantId, instanceId, {
+      base,
+      botToken: bot?.accessToken,
+    });
+  };
+
   const postAck = async (text: string): Promise<void> => {
     try {
-      const bot =
-        ctx.agentId !== null
-          ? await loadAgentBot(tenantId, instanceId, ctx.agentId, base)
-          : null;
-      const client = await loadChatwootClient(tenantId, instanceId, {
-        base,
-        botToken: bot?.accessToken,
-      });
+      const client = await personaClient();
       await client.sendMessage(conversationId, text);
     } catch (err) {
       logger.warn(
@@ -637,14 +693,7 @@ async function maybeConsumeCommandOrGate(params: {
   // one-shot "agent is in test mode" notice on a silenced conversation.
   const postPrivateNote = async (text: string): Promise<void> => {
     try {
-      const bot =
-        ctx.agentId !== null
-          ? await loadAgentBot(tenantId, instanceId, ctx.agentId, base)
-          : null;
-      const client = await loadChatwootClient(tenantId, instanceId, {
-        base,
-        botToken: bot?.accessToken,
-      });
+      const client = await personaClient();
       await client.sendPrivateNote(conversationId, text);
     } catch (err) {
       logger.warn(
@@ -732,99 +781,108 @@ async function maybeConsumeCommandOrGate(params: {
   //    audio preference + this conversation's labels and custom attributes. Deliberately does NOT touch
   //    testActivatedAt (the conversation keeps answering). Every step is best-effort; consumed regardless.
   if (isReset && shouldRunReset(ctx.mode, ctx.conv.testActivatedAt)) {
+    // Each cleanup is independent and best-effort, so each gets its OWN try: sharing one meant the
+    // first failure skipped every step after it (the kanban card kept the previous episode's dates
+    // because the attributes call above it had thrown). `failed` collects the PT-BR name of whatever
+    // did not get cleared, so the confirmation below can stop claiming a full reset after a partial
+    // one. `label` is what the customer-visible ack names; `what` is the English log wording.
+    const failed: string[] = [];
+    const step = async <T>(
+      what: string,
+      label: string,
+      run: () => Promise<T>,
+    ): Promise<T | null> => {
+      try {
+        return await run();
+      } catch (err) {
+        failed.push(label);
+        logger.warn(
+          "chatwoot: /reset %s failed (conv=%s): %s",
+          what,
+          String(conversationId),
+          errMsg(err),
+        );
+        return null;
+      }
+    };
+
     // Clear the agent's memory thread (per contact-inbox / channel) AND the AgentThread marker (the
     // divider's last-conversation + the ingestion watermark), so a reset truly starts this channel's
     // conversation over. Only THIS channel's memory is cleared (the contact's other channels keep
     // their own threads), which matches where the operator typed /reset.
     if (ctx.conv.contactInboxId !== null) {
       const contactInboxId = ctx.conv.contactInboxId;
-      try {
+      await step("deleteThread", "memória", async () => {
         const cp = await getCheckpointer();
         await cp.deleteThread(
           contactInboxThreadId(tenantId, instanceId, contactInboxId),
         );
-      } catch (err) {
-        logger.warn(
-          "chatwoot: /reset deleteThread failed (conv=%s): %s",
-          String(conversationId),
-          errMsg(err),
-        );
-      }
-      try {
-        await runScopedOn(base, sysCtx(tenantId), (db) =>
+      });
+      await step("clear agent-thread marker", "memória", () =>
+        runScopedOn(base, sysCtx(tenantId), (db) =>
           db.agentThread.deleteMany({
             where: { tenantId, chatwootInstanceId: instanceId, contactInboxId },
           }),
-        );
-      } catch (err) {
-        logger.warn(
-          "chatwoot: /reset clear agent-thread marker failed (conv=%s): %s",
-          String(conversationId),
-          errMsg(err),
-        );
-      }
+        ),
+      );
     }
     if (ctx.conv.contactId !== null) {
       const contactDbId = ctx.conv.contactId;
-      try {
-        await runScopedOn(base, sysCtx(tenantId), (db) =>
+      await step("clear voiceReply", "preferência de áudio", () =>
+        runScopedOn(base, sysCtx(tenantId), (db) =>
           db.contact.update({
             where: { id: contactDbId },
             data: { voiceReply: null },
           }),
-        );
-      } catch (err) {
-        logger.warn(
-          "chatwoot: /reset clear voiceReply failed (conv=%s): %s",
-          String(conversationId),
-          errMsg(err),
-        );
-      }
+        ),
+      );
     }
-    try {
-      const client = await loadChatwootClient(tenantId, instanceId, { base });
-      await client.setConversationLabels(conversationId, []);
-      await client.setConversationCustomAttributes(conversationId, {});
+    // Custom attributes and the kanban card are BOT-token calls, so this client must carry the
+    // persona's token; labels are admin-token and would work either way. Building it is itself a step:
+    // it reads the DB and resolves DNS through the SSRF guard, so during an outage it throws, and
+    // outside the boundary that would abandon the whole reset — including the local cleanups below
+    // and the acknowledgement — after the memory was already wiped.
+    const client = await step(
+      "build the persona client",
+      "etiquetas, atributos e card do kanban",
+      personaClient,
+    );
+    if (client) {
+      await step("clear labels", "etiquetas", () =>
+        client.setConversationLabels(conversationId, []),
+      );
+      await step("clear custom attributes", "atributos", () =>
+        client.setConversationCustomAttributes(conversationId, {}),
+      );
       // Clear the linked kanban card's scheduled dates too (item 17): a reset is a clean slate, so a
       // stale start/due date from the prior episode must not linger. Title/description/step are kept
       // (they identify the card / hold operator notes). Best-effort — no card ⇒ skip.
-      const taskId = await client.kanbanTaskIdForConversation(conversationId);
-      if (taskId != null) {
-        await client.updateKanbanTask(taskId, {
-          startDate: null,
-          dueDate: null,
-        });
-      }
-    } catch (err) {
-      logger.warn(
-        "chatwoot: /reset clear labels/attributes/card failed (conv=%s): %s",
-        String(conversationId),
-        errMsg(err),
-      );
+      await step("clear kanban card dates", "card do kanban", async () => {
+        const taskId = await client.kanbanTaskIdForConversation(conversationId);
+        if (taskId != null) {
+          await client.updateKanbanTask(taskId, {
+            startDate: null,
+            dueDate: null,
+          });
+        }
+      });
     }
     // Cancel any pending inactivity follow-up: a reset is an explicit "start over", so a queued
-    // proactive nudge from the prior episode is moot. Best-effort.
-    try {
-      const threadId = chatwootThreadId(tenantId, instanceId, conversationId);
-      await cancelPendingJob(
+    // proactive nudge from the prior episode is moot.
+    await step("cancel follow-up", "follow-up pendente", () =>
+      cancelPendingJob(
         tenantId,
         "FOLLOWUP",
-        `followup:${threadId}`,
+        `followup:${chatwootThreadId(tenantId, instanceId, conversationId)}`,
         base,
-      );
-    } catch (err) {
-      logger.warn(
-        "chatwoot: /reset cancel follow-up failed (conv=%s): %s",
-        String(conversationId),
-        errMsg(err),
-      );
-    }
+      ),
+    );
     // Clear the follow-up watermarks so the sweep does not immediately re-arm a follow-up: a reset is
     // a clean slate, so no proactive nudge should fire until the CUSTOMER sends a genuine message
     // again (which re-anchors lastInboundAt). Also clear the one-shot notice watermarks (test-mode +
     // out-of-hours) so a fresh notice can be posted if this conversation is ever silenced again.
-    try {
-      await runScopedOn(base, sysCtx(tenantId), (db) =>
+    await step("clear follow-up/notice watermarks", "marcadores", () =>
+      runScopedOn(base, sysCtx(tenantId), (db) =>
         db.conversation.update({
           where: { id: ctx.conv.id },
           data: {
@@ -834,18 +892,22 @@ async function maybeConsumeCommandOrGate(params: {
             outOfHoursNoticeSentAt: null,
           },
         }),
-      );
-    } catch (err) {
-      logger.warn(
-        "chatwoot: /reset clear test-notice flag failed (conv=%s): %s",
-        String(conversationId),
-        errMsg(err),
-      );
-    }
-    await postAck(
-      "🔄 Memória, preferência de áudio e etiquetas/atributos desta conversa foram limpos.",
+      ),
     );
-    logger.info("chatwoot: /reset (conv=%s)", String(conversationId));
+    // Best-effort is the design; announcing a full reset after a partial one is not. The operator
+    // typed /reset to get a clean slate, and acting on a conversation that is not clean is worse than
+    // knowing what survived.
+    const distinctFailed = [...new Set(failed)];
+    await postAck(
+      distinctFailed.length === 0
+        ? "🔄 Memória, preferência de áudio e etiquetas/atributos desta conversa foram limpos."
+        : `⚠️ Reset parcial: não consegui limpar ${distinctFailed.join(", ")}. O restante foi limpo.`,
+    );
+    logger.info(
+      "chatwoot: /reset (conv=%s failed=%s)",
+      String(conversationId),
+      distinctFailed.length === 0 ? "none" : distinctFailed.join("|"),
+    );
     return true;
   }
   // A /reset typed while test mode is NOT yet active for this conversation (no /teste) must not wipe
@@ -973,25 +1035,21 @@ export async function processChatwootDelivery(
 
   const n = params.normalized;
 
-  // ONLY a brand-new incoming message (message_created) drives anything below. A message_updated
-  // re-delivered to the bot — notably our own STT/vision write-back, which the fork re-dispatches
-  // (Message#dispatch_update_event) — must do nothing but mirror. Hoisted here because it gates the
-  // agent-runtime read, the command flag, and the eager-media decision.
+  // Only message_created drives commands, debounce and the agent turn. A message_updated can still
+  // carry an audio attachment that was absent at creation time; it is eligible for STT only.
   const isNewIncoming = isNewIncomingMessage(n);
+  const hasLateMedia = hasPendingInboundMediaUpdate(n);
 
-  // Resolve the bound agent's runtime knobs (enabled + mode) once on a new incoming message (cheap
-  // scoped read). It gates two things: (1) command activeness — control commands (/teste, /reset)
-  // only apply to a TEST-mode agent, otherwise they are ordinary customer text, and the mirror must
-  // NOT count an ACTIVE command as genuine engagement (no lastInboundAt advance / follow-up arm); and
-  // (2) eager media — STT/vision run on every incoming message only for an ENABLED + PRODUCTION agent.
-  const rt = isNewIncoming
-    ? await inboxAgentRuntime(
-        params.tenantId,
-        params.instanceId,
-        n.inboxId,
-        base,
-      )
-    : null;
+  // Resolve the bound agent for a new message or a late-media update. The latter never drives a turn.
+  const rt =
+    isNewIncoming || hasLateMedia
+      ? await inboxAgentRuntime(
+          params.tenantId,
+          params.instanceId,
+          n.inboxId,
+          base,
+        )
+      : null;
   const command = isNewIncoming ? controlCommand(n) : null;
   const commandActive = command !== null && rt?.mode === "test";
 
@@ -1018,11 +1076,17 @@ export async function processChatwootDelivery(
   }
 
   // Gate, then the agent runtime — all network OUTSIDE the transaction.
+  // NOTE: The payload wins when it spoke (explicit null = a real unassign); when it said nothing
+  // (no meta), fall back to the mirror's EFFECTIVE state — it preserves the stored trio now, so a
+  // degraded event on a human-owned conversation must not read as bot-owned.
+  const assigneeKnown = n.assigneeType !== undefined;
   const act = shouldBotHandle(
     {
-      assigneeType: n.assigneeType,
+      assigneeType: assigneeKnown
+        ? (n.assigneeType ?? null)
+        : mirror.assigneeType,
       status: n.status,
-      assigneeId: n.assigneeId,
+      assigneeId: assigneeKnown ? (n.assigneeId ?? null) : mirror.assigneeId,
     },
     { ourAgentBotId: params.agentBotId },
   );
@@ -1101,12 +1165,26 @@ export async function processChatwootDelivery(
     }
   }
 
-  // Eager media (STT/vision) for an ENABLED + PRODUCTION agent runs on EVERY new incoming message —
-  // even one the agent won't reply to (out of hours, a human is handling, a closed conversation) — so
-  // the content is captured for the agent's memory/ingestion. Test-mode agents analyze only
-  // on the answer path (below); a disabled/unbound inbox never analyzes (no STT/vision cost). The
-  // call is idempotent, so the answer-path call below is a no-op when this already ran. Best-effort.
-  if (isNewIncoming && rt?.enabled && rt.mode === "production") {
+  // Production analyzes every new incoming message. Some transports attach the audio just after
+  // message_created, so the first useful attachment arrives on message_updated; analyze that update
+  // without arming debounce or a second turn. Test mode keeps its cost fence and only analyzes a late
+  // attachment when this conversation was explicitly activated.
+  const activatedTestLateMedia =
+    hasLateMedia &&
+    rt?.enabled === true &&
+    rt.mode === "test" &&
+    act &&
+    (await isTestConversationActivated({
+      tenantId: params.tenantId,
+      instanceId: params.instanceId,
+      conversationId: n.conversationId,
+      base,
+    }));
+  if (
+    rt?.enabled &&
+    ((isNewIncoming && rt.mode === "production") ||
+      (hasLateMedia && (rt.mode === "production" || activatedTestLateMedia)))
+  ) {
     await runEagerMedia(params.tenantId, params.instanceId, n, base);
   }
 
@@ -1179,6 +1257,7 @@ export async function processChatwootDelivery(
               threadId,
               agentBotId: params.agentBotId,
               cfg,
+              lastMessageId: n.message?.id ?? undefined,
               base,
             });
             armed = true;
@@ -1250,6 +1329,30 @@ export async function processChatwootDelivery(
               error: err,
               base,
             });
+            // And, when nothing else is coming, say so INSIDE Chatwoot (issue #71). There is no
+            // retry on this path, so the only thing that can still answer is a newer message's own
+            // turn — the same fence the success path applies at `shouldPost`. Read by the announcer,
+            // not here: the answer has to describe the moment of the note, not the moment of the
+            // failure.
+            const conversationId = n.conversationId;
+            const triggerId = n.message?.id ?? null;
+            await announceFailedTurn({
+              tenantId: params.tenantId,
+              instanceId: params.instanceId,
+              chatwootConversationId: conversationId,
+              assess: async () => ({
+                path: "direct",
+                fence: await readDirectFence({
+                  tenantId: params.tenantId,
+                  instanceId: params.instanceId,
+                  chatwootConversationId: conversationId,
+                  triggerId,
+                  base,
+                }),
+              }),
+              error: err,
+              base,
+            });
           }
         }
       }
@@ -1305,6 +1408,34 @@ export async function processChatwootDelivery(
       n.event,
       isNewIncoming,
     );
+  }
+
+  // A new inbound message the bot deliberately leaves unanswered — the conversation is human-owned
+  // (!act) or a command/test-mode gate consumed it — still advances the handled watermark: it is
+  // context, not a pending task. Left behind, these pile up below the watermark and the first flush
+  // after a human returns the conversation re-answers the whole human-era backlog, handoff reason
+  // included (issue #8). When a turn WILL run (act && !consumed), the turn/flush owns the advance.
+  // Best-effort: a miss only widens a later re-coalesce.
+  if (
+    isNewIncoming &&
+    (!act || consumed) &&
+    n.message?.id != null &&
+    mirror.conversationRowId !== null
+  ) {
+    try {
+      await advanceHandledWatermark({
+        tenantId: params.tenantId,
+        conversationDbId: mirror.conversationRowId,
+        toMessageId: n.message.id,
+        base,
+      });
+    } catch (err) {
+      logger.warn(
+        "chatwoot: advance handled watermark failed (conv=%s): %s",
+        convLabel,
+        errMsg(err),
+      );
+    }
   }
 
   // Continuous ingestion (production + enabled only): fold the messages no turn handled into the

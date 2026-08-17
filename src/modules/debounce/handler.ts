@@ -8,10 +8,12 @@ import {
   runLoadedTurn,
 } from "@/graph/runtime";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
+import { overlayMediaAnnotations } from "@/modules/chatwoot/annotations";
 import { loadChatwootClient } from "@/modules/chatwoot/instance";
 import {
   buildQuoteResolver,
   type ChatwootMessageRow,
+  maxIncomingId,
   parseChatwootMessages,
   pendingIncoming,
   toRenderable,
@@ -22,11 +24,18 @@ import {
   clearConversationError,
   recordConversationError,
 } from "@/modules/conversations/error";
+import { announceFailedTurn } from "@/modules/conversations/failure-note";
 import { emitFlowEvent } from "@/modules/flowlog/service";
 import type { FlowStage } from "@/modules/flowlog/stages";
 import type { ClaimedJob } from "@/modules/scheduler/service";
-import { type JobResult, registerJobHandler } from "@/modules/scheduler/worker";
+import {
+  type JobResult,
+  registerDeadLetterHandler,
+  registerJobHandler,
+} from "@/modules/scheduler/worker";
+import { readLastMessageId } from "./service";
 import { readDebounceConfig } from "./settings";
+import { advanceHandledWatermark } from "./watermark";
 
 // The DEBOUNCE flush: re-fetch the conversation from Chatwoot, coalesce the inbound messages past the
 // watermark into one turn, and answer once. Two re-fetches by design: the first builds the burst to
@@ -41,22 +50,6 @@ function sysCtx(tenantId: bigint): TenantContext {
 
 function err(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
-}
-
-// The highest incoming, non-private, non-empty message id in a fetched page (or `floor` if none).
-function maxIncomingId(messages: ChatwootMessageRow[], floor: number): number {
-  let max = floor;
-  for (const m of messages) {
-    if (
-      m.messageType === "incoming" &&
-      !m.private &&
-      m.content.trim() &&
-      m.id > max
-    ) {
-      max = m.id;
-    }
-  }
-  return max;
 }
 
 // The shared "re-fetch → coalesce a burst → answer once" tail, reused by the debounce flush AND the
@@ -105,6 +98,10 @@ export async function coalesceAndRunTurn(
   const messages = parseChatwootMessages(
     await client.getMessages(conversationId),
   );
+  // NOTE: Overlay the in-process media annotations BEFORE selecting/rendering: on upstream Chatwoot
+  // the attachment-meta write-back 404s, so this is the only way a voice note's transcription (or a
+  // vision extraction) reaches the flush (issue #49). Meta values, when present, stay authoritative.
+  overlayMediaAnnotations(tenantId, instanceId, messages);
   let pending = ctx.selectPending(messages);
   if (pending.length === 0) return "empty";
 
@@ -133,7 +130,17 @@ export async function coalesceAndRunTurn(
   const rendered = pending
     .map((m) => renderInboundMessage(toRenderable(m), { resolveQuoted }))
     .filter((s) => s.length > 0);
-  if (rendered.length === 0) return "empty";
+  if (rendered.length === 0) {
+    // Nothing in the burst renders to answerable text — it never will, so mark it handled or every
+    // future flush re-fetches and re-stops on the same messages.
+    await advanceHandledWatermark({
+      tenantId,
+      conversationDbId: convDbId,
+      toMessageId: targetWatermark,
+      base,
+    });
+    return "empty";
+  }
   const text = rendered.join("\n");
 
   // 2. Post gate: re-fetch to detect mid-turn arrivals (supersede), then advance the watermark
@@ -159,18 +166,11 @@ export async function coalesceAndRunTurn(
         err(e),
       );
     }
-    return runScopedOn(base, sysCtx(tenantId), async (db) => {
-      const cas = await db.conversation.updateMany({
-        where: {
-          id: convDbId,
-          OR: [
-            { lastHandledMessageId: null },
-            { lastHandledMessageId: { lt: targetWatermark } },
-          ],
-        },
-        data: { lastHandledMessageId: targetWatermark },
-      });
-      return cas.count > 0;
+    return advanceHandledWatermark({
+      tenantId,
+      conversationDbId: convDbId,
+      toMessageId: targetWatermark,
+      base,
     });
   };
 
@@ -213,6 +213,21 @@ export async function coalesceAndRunTurn(
     deps,
     shouldPost,
   });
+  // Every completed outcome except "superseded" consumed the burst: answered ("posted" — where
+  // shouldPost's CAS already advanced, making this a no-op, including the input-guardrail template
+  // which claims through the same gate), or deliberately dropped (taken over mid-turn, empty
+  // reply, guardrail "silent"). Advance so the next flush cannot re-answer the same burst (issue
+  // #8: the pre-handoff backlog was re-coalesced — and the bot re-transferred for the old reason —
+  // after a human returned the conversation). "superseded" stays put by design: the re-armed flush
+  // answers the FULL burst.
+  if (outcome !== "superseded") {
+    await advanceHandledWatermark({
+      tenantId,
+      conversationDbId: convDbId,
+      toMessageId: targetWatermark,
+      base,
+    });
+  }
   logger.info(
     "%s: conv=%s msgs=%d watermark→%d outcome=%s",
     ctx.label,
@@ -270,7 +285,7 @@ export async function flushDebounceJob(
         { ourAgentBotId: agentBotId },
       )
     ) {
-      return "gate-closed" as const;
+      return { gateClosed: true as const, convDbId: conv.id };
     }
     const inbox = await db.inbox.findUnique({
       where: { id: conv.inboxId },
@@ -296,8 +311,25 @@ export async function flushDebounceJob(
       settings: agentRow?.settings ?? {},
     };
   });
-  // No agent / unbound inbox / human took over → nothing to do (not a failure).
-  if (ctx === null || ctx === "gate-closed") return { outcome: "done" };
+  // No agent / unbound inbox → nothing to do (not a failure).
+  if (ctx === null) return { outcome: "done" };
+  // Human took over between the arm and this flush: the burst is the human's to answer now, so it
+  // still counts as handled. The arm path kept the burst's newest message id in the payload
+  // precisely so this advance needs no network fetch (issue #8) — without it, the burst would sit
+  // below the watermark and the first flush after the human returns the conversation would
+  // re-answer it.
+  if ("gateClosed" in ctx) {
+    const last = readLastMessageId(job.payload);
+    if (last !== null) {
+      await advanceHandledWatermark({
+        tenantId,
+        conversationDbId: ctx.convDbId,
+        toMessageId: last,
+        base,
+      });
+    }
+    return { outcome: "done" };
+  }
 
   // Coalesce the burst past the watermark and answer once. A thrown error (LLM/Chatwoot) bubbles to
   // the worker → retry with backoff (watermark not advanced, so the retry re-answers the same burst).
@@ -351,9 +383,46 @@ function debounceFlushHandler(
   return flushDebounceJob({ job, base });
 }
 
+// The burst is definitively unanswered: the flush exhausted its attempts and the row is DEAD, so no
+// retry is coming and the customer is waiting on nobody. This is the only place on this path where
+// that can be said — the handler's catch runs on attempt 1 too, and cannot know whether another
+// attempt exists (issue #71).
+export async function announceDeadDebounceFlush(
+  job: ClaimedJob,
+  error: string,
+  base: PrismaClient,
+): Promise<void> {
+  const threadId =
+    typeof job.payload.threadId === "string" ? job.payload.threadId : null;
+  if (!threadId) return;
+  const parsed = parseThreadId(threadId);
+  if (!parsed || parsed.tenantId !== job.tenantId) return;
+  await announceFailedTurn({
+    tenantId: job.tenantId,
+    instanceId: parsed.instanceId,
+    chatwootConversationId: parsed.conversationId,
+    // NOTE: Re-read rather than trust the dead-letter that got us here: `armDebounce` upserts this
+    // very row back to PENDING on the next inbound message, and a row that is queued again is a turn
+    // that is coming — announcing over it is what would make an operator take over and close the
+    // gate that queued flush depends on.
+    assess: async () => {
+      const row = await runScopedOn(base, sysCtx(job.tenantId), (db) =>
+        db.schedulerJob.findUnique({
+          where: { id: job.id },
+          select: { status: true },
+        }),
+      );
+      return { path: "job", deadLettered: row?.status === "DEAD" };
+    },
+    error,
+    base,
+  });
+}
+
 let registered = false;
 export function registerDebounceHandler(): void {
   if (registered) return;
   registerJobHandler("DEBOUNCE", debounceFlushHandler);
+  registerDeadLetterHandler("DEBOUNCE", announceDeadDebounceFlush);
   registered = true;
 }

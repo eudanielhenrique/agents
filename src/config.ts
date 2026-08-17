@@ -42,6 +42,7 @@ const {
   AGENTS_UPDATE_CHECK_URL,
   HUB_UPDATES_TTL_MS,
   AGENT_MODEL_CONCURRENCY,
+  AGENT_PROMPT_MAX_CHARS,
   DB_POOL_MAX,
   NUVEMSHOP_CLIENT_ID,
   NUVEMSHOP_CLIENT_SECRET,
@@ -78,6 +79,11 @@ const googleClientId = (GOOGLE_CLIENT_ID ?? "").trim();
 const nuvemshopClientId = (NUVEMSHOP_CLIENT_ID ?? "").trim();
 const nuvemshopClientSecret = (NUVEMSHOP_CLIENT_SECRET ?? "").trim();
 
+// NOTE: strict parse — anything but a finite positive integer (Infinity, NaN, 0, negatives,
+// fractions) falls back to the default, so the prompt-size guard can never be disabled by a
+// malformed value.
+const agentPromptMaxChars = Number(AGENT_PROMPT_MAX_CHARS);
+
 const config = {
   packageInfo: {
     name: packageInfo.name,
@@ -109,9 +115,16 @@ const config = {
   // a derived-but-distinct value so the separation holds even if MCP_JWT_SECRET is unset.
   mcpJwtSecret:
     MCP_JWT_SECRET || `${JWT_SECRET || "change-me-in-production"}:mcp`,
-  // NOTE: Dynamic Client Registration is OFF by default (an open /register is a privilege-
-  // escalation surface). Enable only when you need programmatic MCP client onboarding.
-  mcpDcrEnabled: MCP_DCR_ENABLED === "true",
+  // NOTE: Dynamic Client Registration is ON by default: every MCP client we support self-registers
+  // and NONE has a fallback — with `registration_endpoint` absent from the metadata, Codex aborts
+  // with "Dynamic client registration not supported" and Claude Code with "Incompatible auth
+  // server", both before any login screen. Pre-registering a client does not rescue them either
+  // (Codex's loopback callback uses a random port, and /authorize matches redirect_uri exactly), so
+  // a closed default means the MCP transport is simply unreachable. Set MCP_DCR_ENABLED=false to
+  // close it: /register 404s and the metadata stops advertising it. A self-registered client is
+  // still shown as "unverified" on the consent screen, /register is rate-limited, and the effective
+  // grant stays role-gated at /authorize.
+  mcpDcrEnabled: MCP_DCR_ENABLED !== "false",
   encryptionKey: ENCRYPTION_KEY || "change-me-in-production",
   corsOrigin: CORS_ORIGIN || "localhost:3000",
   databaseUrl: DATABASE_URL,
@@ -157,6 +170,14 @@ const config = {
       AGENT_MODEL_CONCURRENCY && Number(AGENT_MODEL_CONCURRENCY) > 0
         ? Number(AGENT_MODEL_CONCURRENCY)
         : 20,
+    // NOTE: Hard cap (characters) on an agent's system prompt, enforced at the service layer for
+    // every transport (console/REST/MCP) and at import. A deliberate checkpoint, not a technical
+    // ceiling: prompts past tens of KB usually hold knowledge-base content and degrade instruction
+    // adherence. Intentionally surfaced only as a save error — no UI affordance points here.
+    promptMaxChars:
+      Number.isSafeInteger(agentPromptMaxChars) && agentPromptMaxChars > 0
+        ? agentPromptMaxChars
+        : 100_000,
   },
   // NOTE: Outbound webhook delivery worker. Single-replica by construction (a reentrancy
   // guard + interval; see docs/deploy.md "Single replica" for the leader pattern when scaling).

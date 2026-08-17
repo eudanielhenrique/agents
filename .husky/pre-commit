@@ -1,5 +1,6 @@
 set -e
 
+# Local quality gate: the same checks the PR CI runs (lint, type-check, i18n, tests).
 bun check
 
 # Skill safety gate (mirrors publish-skill.yml): build the skill trees and block the commit on ANY

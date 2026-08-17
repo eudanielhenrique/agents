@@ -41,6 +41,7 @@ let instanceId = 0n;
 let contactId = 0n;
 let llmKeyId = 0n;
 let ttsKeyId = 0n;
+let igInboxId = 0n;
 
 const REPLY = "Claro, vou te ajudar!";
 
@@ -73,11 +74,11 @@ function makeStub(rec: {
   return async () => client;
 }
 
-const audioEvent = (convId: number): NormalizedChatwootEvent => ({
+const audioEvent = (convId: number, inboxId = 7): NormalizedChatwootEvent => ({
   event: "message_created",
   conversationId: convId,
   contactInboxId: null,
-  inboxId: 7,
+  inboxId,
   status: "pending",
   assigneeType: null,
   assigneeId: null,
@@ -104,7 +105,7 @@ const textEvent = (convId: number): NormalizedChatwootEvent => ({
   message: { id: 2, content: "oi", messageType: "incoming", private: false },
 });
 
-async function seedConversation(convId: number) {
+async function seedConversation(convId: number, inboxDbId?: bigint) {
   await suDb.conversation.create({
     data: {
       tenantId,
@@ -113,6 +114,7 @@ async function seedConversation(convId: number) {
       status: "pending",
       assigneeType: null,
       contactId,
+      ...(inboxDbId === undefined ? {} : { inboxId: inboxDbId }),
       threadId: `${tenantId}:${instanceId}:${convId}`,
       lastEventAt: new Date(),
     },
@@ -185,6 +187,20 @@ describe.skipIf(!dbUp)("tts", () => {
         agentId: agent.id,
       },
     });
+    // NOTE: a second inbox on a channel that refuses Ogg/Opus (Meta's Instagram messaging accepts audio
+    // only as aac/m4a/wav/mp4) — the reply container must follow the channel.
+    const igInbox = await suDb.inbox.create({
+      data: {
+        tenantId,
+        chatwootInstanceId: instanceId,
+        chatwootInboxId: 8,
+        name: "Instagram",
+        channelType: "Channel::Instagram",
+        agentId: agent.id,
+      },
+      select: { id: true },
+    });
+    igInboxId = igInbox.id;
     const contact = await suDb.contact.create({
       data: { tenantId, name: "Cliente", chatwootContactId: 1 },
     });
@@ -274,6 +290,77 @@ describe.skipIf(!dbUp)("tts", () => {
     }
     expect(row?.level).toBe("warn");
     expect(row?.status).toBe("skipped");
+  });
+
+  // NOTE: a failing ElevenLabs synth used to log `format: "ogg_opus"` (our INTERNAL container name) next
+  // to a bare "failed with 400" — which reads exactly like the value we put on the wire, and was
+  // reported as such. The line now carries the provider-level format alongside it, plus the
+  // provider's own machine-readable error code (never its free-text message).
+  test("a provider failure logs the wire format and the provider's error code", async () => {
+    const cfg: TtsConfig = {
+      mode: "mirror",
+      provider: "elevenlabs",
+      model: "",
+      voice: "Keren123",
+      credentialRef: `vault:${ttsKeyId}`,
+      baseURL: null,
+      normalize: false,
+    };
+    const f: FlowContext = {
+      tenantId,
+      turnId: "tts-fail-400",
+      source: "inbox",
+      base: appDb,
+    };
+    const failingFetch = (async () =>
+      new Response(
+        JSON.stringify({
+          detail: {
+            status: "voice_not_found",
+            message: "A voice with voice_id Keren123 was not found.",
+          },
+        }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    await expect(
+      synthesizeReply({
+        tenantId,
+        cfg,
+        text: "olá",
+        base: appDb,
+        deps: { fetchImpl: failingFetch },
+        flow: f,
+      }),
+    ).rejects.toThrow("TTS elevenlabs failed with 400 (voice_not_found)");
+
+    let row: {
+      level: string;
+      status: string | null;
+      errorMessage: string | null;
+      detail: unknown;
+    } | null = null;
+    for (let i = 0; i < 100 && !row; i++) {
+      row = await suDb.executionLog.findFirst({
+        where: { tenantId, turnId: "tts-fail-400", stage: "tts" },
+        select: {
+          level: true,
+          status: true,
+          errorMessage: true,
+          detail: true,
+        },
+      });
+      if (!row) await new Promise((r) => setTimeout(r, 20));
+    }
+    // TTS is best-effort (the runtime falls back to text), so the line is advisory, not a red error.
+    expect(row?.level).toBe("warn");
+    expect(row?.status).toBe("error");
+    expect(row?.errorMessage).toBe(
+      "TTS elevenlabs failed with 400 (voice_not_found)",
+    );
+    expect(row?.errorMessage).not.toContain("was not found.");
+    const detail = row?.detail as Record<string, unknown>;
+    expect(detail.format).toBe("ogg_opus");
+    expect(detail.providerFormat).toBe("opus_48000_64");
   });
 
   test("normalize=true rewrites the synth input via the injected normalizer", async () => {
@@ -386,6 +473,32 @@ describe.skipIf(!dbUp)("tts", () => {
     });
     expect(outcome).toBe("posted");
     expect(rec.audio).toEqual([[910, "reply.ogg"]]);
+    expect(rec.text).toEqual([]);
+  });
+
+  test("mirror mode on an Instagram inbox → the audio reply is aac, not ogg", async () => {
+    await seedConversation(933, igInboxId);
+    const rec = {
+      text: [] as [number, string][],
+      audio: [] as [number, string][],
+    };
+    const outcome = await runAgentTurn({
+      tenantId,
+      instanceId,
+      agentBotId: 9,
+      event: audioEvent(933, 8),
+      base: appDb,
+      deps: {
+        makeModel: fakeModel,
+        makeClient: makeStub(rec),
+        checkpointer: new MemorySaver(),
+        ttsFetch: audioFetch(),
+      },
+    });
+    // NOTE: ogg would make Meta's send job fail AFTER Chatwoot shows the message as sent (the customer
+    // never receives it); on this channel the openai provider must emit aac.
+    expect(outcome).toBe("posted");
+    expect(rec.audio).toEqual([[933, "reply.aac"]]);
     expect(rec.text).toEqual([]);
   });
 

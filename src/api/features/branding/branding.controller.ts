@@ -1,6 +1,6 @@
 import { Elysia, t } from "elysia";
 import { authPlugin } from "@/api/lib/auth";
-import { doc, errors } from "@/api/lib/openapi";
+import { doc, errors, jsonResponse } from "@/api/lib/openapi";
 import {
   clearBrandingAsset,
   setBrandingAsset,
@@ -42,6 +42,11 @@ export const brandingController = new Elysia({
           "Returns the resolved global identity: colors, which asset variants exist, and the cache version. Public so it can load before any auth context.",
         ),
         security: [],
+        responses: {
+          200: jsonResponse(
+            "The resolved global branding: brand name, color mode and tokens, which logo/favicon variants exist, and the cache-busting version.",
+          ),
+        },
       },
     },
   )
@@ -109,6 +114,24 @@ export const brandingController = new Elysia({
       tokensDark: t.Optional(
         t.Record(t.String(), t.Unknown(), {
           description: "Dark-theme CSS token overrides keyed by token name.",
+        }),
+      ),
+      siteUrl: t.Optional(
+        t.Union([t.String({ maxLength: 512 }), t.Null()], {
+          description:
+            "Sidebar-footer website link (absolute http(s) URL), or null to use the default.",
+        }),
+      ),
+      supportEmail: t.Optional(
+        t.Union([t.String({ maxLength: 254 }), t.Null()], {
+          description:
+            "Support e-mail shown in the sidebar support modal, or null to use the default.",
+        }),
+      ),
+      hideGithubLink: t.Optional(
+        t.Boolean({
+          description:
+            "When true, the GitHub entry is removed from the sidebar footer.",
         }),
       ),
     }),

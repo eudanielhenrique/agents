@@ -89,7 +89,7 @@ If the bug is fixed, simplify `src/app.ts` by removing the `serve.routes` carve-
 
 - Before configuring `DATABASE_URL` in `.env`, check for existing PostgreSQL instances by scanning ports (e.g. `lsof -nP -iTCP:5432 -sTCP:LISTEN` on macOS, `ss -tlnp | grep 543` on Linux). Use port 5432 as the default, but if it is already in use by another service, pick the next available port (5433, 5434, etc.) and set `POSTGRES_PORT` accordingly in `.env`
 - **Never run a bare `prisma migrate reset`**: it recreates the `public` schema and wipes the runtime role's grants, so every query on the next boot fails with Postgres `42501` (`permission denied for schema public`). Use `bun db:reset` (reset + `db:bootstrap`) instead, or re-run `bun db:bootstrap` after any reset (including a `migrate dev` that resets on drift). Details in `docs/deploy.md`
-- **Inspecting the DB directly with `psql`: `DATABASE_URL` is the NON-superuser runtime role (`secv4_app`) and RLS is enforced on it.** A raw `psql "$DATABASE_URL"` query without a tenant context returns **zero rows** for every tenant-scoped table (e.g. `agents`) — the rows are there, RLS is just filtering them. This is a silent empty result, not an error, so it reads like "the record doesn't exist" when it actually does. To read across tenants for diagnostics, either (a) connect as the superuser via `MIGRATION_DATABASE_URL` (the `postgres` role, which BYPASSES RLS — read-only only, never mutate prod), or (b) set the GUC in-session first: `SET app.tenant_id = '<id>';` (or `SET app.is_super_admin = 'true';`) before the `SELECT`, matching the `set_config('app.tenant_id', …)` the app issues per request (`src/lib/tenancy/multi-tenant.ts`). Do NOT conclude a row is missing from a bare runtime-role query. See [`docs/tenancy.md`](docs/tenancy.md)
+- **Inspecting the DB directly with `psql`: `DATABASE_URL` is the NON-superuser runtime role (`fazerai_app`) and RLS is enforced on it.** A raw `psql "$DATABASE_URL"` query without a tenant context returns **zero rows** for every tenant-scoped table (e.g. `agents`) — the rows are there, RLS is just filtering them. This is a silent empty result, not an error, so it reads like "the record doesn't exist" when it actually does. To read across tenants for diagnostics, either (a) connect as the superuser via `MIGRATION_DATABASE_URL` (the `postgres` role, which BYPASSES RLS — read-only only, never mutate prod), or (b) set the GUC in-session first: `SET app.tenant_id = '<id>';` (or `SET app.is_super_admin = 'true';`) before the `SELECT`, matching the `set_config('app.tenant_id', …)` the app issues per request (`src/lib/tenancy/multi-tenant.ts`). Do NOT conclude a row is missing from a bare runtime-role query. See [`docs/tenancy.md`](docs/tenancy.md)
 
 ## Common commands
 
@@ -107,7 +107,7 @@ If the bug is fixed, simplify `src/app.ts` by removing the `serve.routes` carve-
 | `bun db:reset`                     | Reset the database AND re-provision runtime-role grants (never bare `migrate reset`)     |
 | `bun db:test:setup`                | Provision/migrate the isolated test database                                             |
 | `bun prisma:generate`              | Generate Prisma client                                                                   |
-| `bun i18n:extract`                 | Extract translation keys (also runs in the pre-commit hook)                              |
+| `bun i18n:extract`                 | Extract translation keys (also part of `bun check`)                                      |
 | `bun set-admin <email> [password]` | Promote a user to admin (creates the user if it doesn't exist; optionally sets password) |
 
 
@@ -180,7 +180,7 @@ When adding external dependencies (analytics, captcha, CDN), extend the relevant
 - Husky pre-commit hooks run lint, type-check, and tests
 - Prefer `Bun.file(path).text()` / `Bun.file(path).json()` over `node:fs` for file reads. The Bun API is idiomatic in this runtime and supports both sync and async patterns cleanly.
 - Always run `bun check` after applying all code changes to ensure code quality and correctness
-- Only add comments when strictly necessary, never obvious/redundant ones. Comments must have a tag: `// TODO:`, `// NOTE:`, or `// FIXME:`
+- Only add comments when strictly necessary, never obvious/redundant ones. **Where the tag goes**: a comment that DOCUMENTS a symbol (the module header at the top of a file, or the docstring directly above a declaration, exported or not) carries **no** tag; a comment INSIDE a body must have one: `// TODO:`, `// NOTE:`, or `// FIXME:`. Spelled out because the shorter phrasing reads as "every comment needs a tag", which makes review tooling flag every docstring in the tree
 - **Cursor styles**: `cursor: pointer` is set globally on `button`, `select`, `[role="button"]` in `public/index.css`. Never use `cursor-pointer` on individual elements. Only use cursor utilities for overrides like `cursor-not-allowed` on disabled states
 - Use the `cn` utility for component classNames. For conditional classNames, use object syntax `cn("base", { "active": isActive })`, not ternary operators
 - Add `aria-*` attributes for accessibility on interactive elements

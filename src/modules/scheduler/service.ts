@@ -129,8 +129,11 @@ async function claimWhere(
   base: PrismaClient,
   now: Date,
   kindFilter: Prisma.Sql,
+  tenantId?: bigint,
 ): Promise<ClaimedJob[]> {
   const lim = Math.min(Math.max(Math.floor(limit), 1), 100);
+  const tenantClause =
+    tenantId != null ? Prisma.sql`AND tenant_id = ${tenantId}` : Prisma.empty;
   return asSuperAdminOn(base, async (db) => {
     const rows = await db.$queryRaw<
       Array<{
@@ -145,6 +148,7 @@ async function claimWhere(
       WHERE id IN (
         SELECT id FROM scheduler_jobs
         WHERE status = 'PENDING' AND run_at <= ${now} AND ${kindFilter}
+          ${tenantClause}
         ORDER BY run_at
         FOR UPDATE SKIP LOCKED
         LIMIT ${lim}
@@ -164,12 +168,18 @@ async function claimWhere(
 // dedicated fast tick to honor the per-agent window, and leaving them here would make a flush wait
 // up to a full scheduler interval. (A stray DEBOUNCE here would still be handled correctly, but the
 // fast worker is the intended drain.)
+// NOTE: `tenantId` is test-only isolation, same as the alert worker's. The claim is cross-tenant by
+// design (single-leader in production), so two suites running at once against the shared test
+// database steal each other's jobs — the LIMIT fills with the other run's rows, or SKIP LOCKED hands
+// them over outright, and the test that enqueued a job simply does not find it back. Leave it unset
+// in production.
 export function claimDueJobs(
   limit: number,
   base: PrismaClient = basePrisma,
   now: Date = new Date(),
+  tenantId?: bigint,
 ): Promise<ClaimedJob[]> {
-  return claimWhere(limit, base, now, Prisma.sql`kind <> 'DEBOUNCE'`);
+  return claimWhere(limit, base, now, Prisma.sql`kind <> 'DEBOUNCE'`, tenantId);
 }
 
 // The fast debounce tick claims ONLY debounce jobs.
@@ -177,8 +187,9 @@ export function claimDueDebounceJobs(
   limit: number,
   base: PrismaClient = basePrisma,
   now: Date = new Date(),
+  tenantId?: bigint,
 ): Promise<ClaimedJob[]> {
-  return claimWhere(limit, base, now, Prisma.sql`kind = 'DEBOUNCE'`);
+  return claimWhere(limit, base, now, Prisma.sql`kind = 'DEBOUNCE'`, tenantId);
 }
 
 // Terminal success.
@@ -221,6 +232,11 @@ export async function rescheduleJob(
 }
 
 // Failure: attempts++; retry with backoff until the cap, then DEAD.
+// Returns whether this call is the one that DEAD-LETTERED the job — the attempt count alone does not
+// say so. The CAS is on `status = 'CLAIMED'`, and a job re-armed mid-run (`armDebounce` upserts the
+// claimed row back to PENDING) no longer matches it: the row survives with another run already
+// queued, so a caller reading `attempts` would call a live job dead. Anything hanging off "this work
+// is definitively lost" has to hang off this, not off the failure (issue #71).
 export async function failJob(
   tenantId: bigint,
   id: bigint,
@@ -228,10 +244,10 @@ export async function failJob(
   error: string,
   base: PrismaClient = basePrisma,
   now: Date = new Date(),
-): Promise<void> {
+): Promise<{ deadLettered: boolean }> {
   const next = attempts + 1;
   const dead = next >= MAX_ATTEMPTS;
-  await runScopedOn(base, sysCtx(tenantId), (db) =>
+  const { count } = await runScopedOn(base, sysCtx(tenantId), (db) =>
     db.schedulerJob.updateMany({
       where: { id, status: "CLAIMED" },
       data: dead
@@ -244,25 +260,54 @@ export async function failJob(
           },
     }),
   );
+  return { deadLettered: dead && count > 0 };
 }
 
 // Reaper: a CLAIMED row older than `staleMs` is presumed crashed → back to PENDING (attempts++ so
-// poison eventually dies). Cross-tenant, so asSuperAdmin.
+// poison eventually dies). Cross-tenant, so asSuperAdmin. `tenantId` is the same test-only fence as
+// the claim's: without it, a concurrent suite's reap bumps this run's attempts underneath it.
+// Returns every row it touched, because the reaper is the SECOND way a job reaches DEAD: a claim that
+// crashed or hung is killed here, not by `failJob`, and a caller that hangs its "this work is
+// definitively lost" reaction off failJob alone would never hear about those (issue #71 review).
+export interface ReapedJob extends ClaimedJob {
+  status: "PENDING" | "DEAD";
+}
+
 export async function reapStaleJobs(
   staleMs: number,
   base: PrismaClient = basePrisma,
   now: Date = new Date(),
-): Promise<number> {
+  tenantId?: bigint,
+): Promise<ReapedJob[]> {
   const cutoff = new Date(now.getTime() - staleMs);
+  const tenantClause =
+    tenantId != null ? Prisma.sql`AND tenant_id = ${tenantId}` : Prisma.empty;
   return asSuperAdminOn(base, async (db) => {
-    const requeued = await db.$executeRaw`
+    const rows = await db.$queryRaw<
+      Array<{
+        id: bigint;
+        tenant_id: bigint;
+        kind: string;
+        payload: unknown;
+        attempts: number;
+        status: "PENDING" | "DEAD";
+      }>
+    >(Prisma.sql`
       UPDATE scheduler_jobs
       SET status = CASE WHEN attempts + 1 >= ${MAX_ATTEMPTS} THEN 'DEAD'::"SchedulerJobStatus" ELSE 'PENDING'::"SchedulerJobStatus" END,
           attempts = attempts + 1,
           claimed_at = NULL,
           updated_at = now()
-      WHERE status = 'CLAIMED' AND claimed_at < ${cutoff}`;
-    return requeued;
+      WHERE status = 'CLAIMED' AND claimed_at < ${cutoff} ${tenantClause}
+      RETURNING id, tenant_id, kind, payload, attempts, status`);
+    return rows.map((r) => ({
+      id: r.id,
+      tenantId: r.tenant_id,
+      kind: r.kind as ClaimedJob["kind"],
+      payload: (r.payload ?? {}) as ClaimedJob["payload"],
+      attempts: r.attempts,
+      status: r.status,
+    }));
   });
 }
 

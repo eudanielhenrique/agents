@@ -4,11 +4,14 @@ import {
   CalendarClock,
   Gauge,
   Image,
+  ImagePlus,
   Layers,
+  ListChecks,
   Megaphone,
   Mic,
   Plus,
   Scissors,
+  ScrollText,
   Trash2,
   Volume2,
 } from "lucide-react";
@@ -39,6 +42,7 @@ import {
 import { providerLabel } from "@/client/lib/providerLabels";
 import { formatWindowsSummary } from "@/client/lib/schedulePreview";
 import { isValidHttpUrl } from "@/client/lib/validation";
+import { SCOPE_MODEL } from "@/modules/chatwoot/attributes";
 import { FOLLOW_UP_MAX_STEPS } from "@/modules/followups/settings";
 import { DEFAULT_EXTRACTION_PROMPT } from "@/modules/vision/prompt-default";
 import { Section, SectionNav } from "./SectionNav";
@@ -130,6 +134,21 @@ interface LimitsState {
   maxToolCalls: string;
 }
 
+// NOTE: The allowed-host list is edited as raw textarea text (one per line) and only turns into an
+// array on save — the runtime reader normalizes and drops what does not resolve to a hostname, so
+// the operator's half-typed line survives editing instead of vanishing under them.
+export interface SendImageState {
+  allowedHosts: string;
+}
+
+// NOTE: Which Chatwoot custom attributes the agent sees the CURRENT VALUES of (one key list per
+// scope). Mirrors agent.settings.attributeContext / readAttributeContextConfig.
+interface AttributeContextState {
+  conversation: string[];
+  contact: string[];
+  task: string[];
+}
+
 interface ServiceWindowState {
   enabled: boolean;
   windowHours: string;
@@ -175,7 +194,17 @@ interface BehaviorTabProps {
   visionCredBaseUrl: string | null;
   onVisionEntryChange: (entry: VaultEntry | null) => void;
   limits: LimitsState;
+  observability: { logToolValues: boolean };
+  setObservability: React.Dispatch<
+    React.SetStateAction<{ logToolValues: boolean }>
+  >;
   setLimits: React.Dispatch<React.SetStateAction<LimitsState>>;
+  sendImage: SendImageState;
+  setSendImage: React.Dispatch<React.SetStateAction<SendImageState>>;
+  attributeContext: AttributeContextState;
+  setAttributeContext: React.Dispatch<
+    React.SetStateAction<AttributeContextState>
+  >;
   serviceWindow: ServiceWindowState;
   setServiceWindow: React.Dispatch<React.SetStateAction<ServiceWindowState>>;
   followUp: FollowUpState;
@@ -409,6 +438,129 @@ function LabelPicker({
   );
 }
 
+// NOTE: Chatwoot attribute definition (Eden-derived), for the attribute-context pickers below.
+type InboxCustomAttribute = NonNullable<
+  Awaited<
+    ReturnType<
+      ReturnType<(typeof api.api.v1.chatwoot)["custom-attributes"]>["get"]
+    >
+  >["data"]
+>["attributes"][number];
+
+// NOTE: The three attribute pickers (conversation / contact / kanban card). Each lists the account's
+// definitions for that scope, and still accepts a typed key the listing doesn't know (an unreachable
+// Chatwoot, or an attribute created after this page loaded) — the runtime only needs the key.
+function AttributeContextPickers({
+  agentId,
+  attributeContext,
+  setAttributeContext,
+}: {
+  agentId: string;
+  attributeContext: AttributeContextState;
+  setAttributeContext: React.Dispatch<
+    React.SetStateAction<AttributeContextState>
+  >;
+}) {
+  const { t } = useTranslation();
+  const [defs, setDefs] = useState<InboxCustomAttribute[]>([]);
+  const [multiAccount, setMultiAccount] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    // NOTE: Drop the previous agent's definitions BEFORE fetching. If the new request fails (the
+    // catch below is deliberately silent), keeping them would offer one agent's attribute keys —
+    // and the multi-account warning — while editing another.
+    setDefs([]);
+    setMultiAccount(false);
+    void (async () => {
+      try {
+        const { data } = await api.api.v1.chatwoot["custom-attributes"]({
+          agentId,
+        }).get();
+        if (!cancelled && data) {
+          setDefs(data.attributes);
+          setMultiAccount(data.accountCount > 1);
+        }
+      } catch {
+        // NOTE: best-effort — the pickers still accept typed keys
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId]);
+
+  const scopes: Array<{
+    scope: keyof AttributeContextState;
+    label: string;
+    hint: string;
+  }> = [
+    {
+      scope: "conversation",
+      label: t("editor.attributeContextConversation", "Conversation"),
+      hint: t(
+        "editor.attributeContextConversationHint",
+        "Attributes of this conversation (reset with each new conversation).",
+      ),
+    },
+    {
+      scope: "contact",
+      label: t("editor.attributeContextContact", "Contact"),
+      hint: t(
+        "editor.attributeContextContactHint",
+        "Attributes of the customer, kept across every conversation they have.",
+      ),
+    },
+    {
+      scope: "task",
+      label: t("editor.attributeContextTask", "Kanban card"),
+      hint: t(
+        "editor.attributeContextTaskHint",
+        "Attributes of the card linked to this conversation, when there is one.",
+      ),
+    },
+  ];
+
+  return (
+    <div className="flex flex-col gap-4">
+      {scopes.map(({ scope, label, hint }) => (
+        <FormField key={scope} group label={label} description={hint}>
+          <ComboBox
+            multiple
+            values={attributeContext[scope]}
+            onChange={(values) =>
+              setAttributeContext((prev) => ({ ...prev, [scope]: values }))
+            }
+            items={defs
+              .filter((d) => d.model === SCOPE_MODEL[scope])
+              .map((d) => ({
+                id: d.key,
+                label: d.displayName || d.key,
+                hint: d.displayName && d.displayName !== d.key ? d.key : "",
+              }))}
+            placeholder={t(
+              "editor.attributeContextPlaceholder",
+              "Add an attribute…",
+            )}
+            searchPlaceholder={t(
+              "editor.attributeContextSearch",
+              "Search attributes…",
+            )}
+            aria-label={label}
+          />
+        </FormField>
+      ))}
+      {multiAccount && (
+        <span className="text-text-muted text-xs">
+          {t(
+            "editor.attributeContextMultiAccount",
+            "This agent serves more than one Chatwoot account, so the listed attributes mix accounts. Type each key exactly as it appears.",
+          )}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // The multi-step follow-up editor: an ordered list of step cards (delay + instructions + optional
 // label, and a resolve toggle on the LAST step). Labels are fetched once per agent from the inbox.
 function FollowUpStepsEditor({
@@ -605,7 +757,13 @@ export function BehaviorTab({
   visionCredBaseUrl,
   onVisionEntryChange,
   limits,
+  observability,
+  setObservability,
   setLimits,
+  sendImage,
+  setSendImage,
+  attributeContext,
+  setAttributeContext,
   serviceWindow,
   setServiceWindow,
   followUp,
@@ -680,9 +838,24 @@ export function BehaviorTab({
       label: t("editor.split", "Reply in multiple messages"),
     },
     {
+      id: "attributeContext",
+      icon: ListChecks,
+      label: t("editor.attributeContext", "Data in context"),
+    },
+    {
+      id: "sendImage",
+      icon: ImagePlus,
+      label: t("editor.sendImage", "Sending images"),
+    },
+    {
       id: "limits",
       icon: Gauge,
       label: t("editor.limits", "Execution limits"),
+    },
+    {
+      id: "observability",
+      icon: ScrollText,
+      label: t("editor.observability", "Logs"),
     },
     {
       id: "proactive",
@@ -1287,6 +1460,47 @@ export function BehaviorTab({
           </Section>
 
           <Section
+            id="attributeContext"
+            icon={ListChecks}
+            title={t("editor.attributeContext", "Data in context")}
+            description={t(
+              "editor.attributeContextHint",
+              'Chatwoot custom attributes whose CURRENT values the agent sees on every turn, so it knows what has already been collected and what is still missing. Pick only what matters to the conversation — everything selected goes into the prompt. The agent only writes them back when it has the "Set attribute" tool; without it they are read-only context.',
+            )}
+          >
+            <AttributeContextPickers
+              agentId={agentId}
+              attributeContext={attributeContext}
+              setAttributeContext={setAttributeContext}
+            />
+          </Section>
+
+          <Section
+            id="sendImage"
+            icon={ImagePlus}
+            title={t("editor.sendImage", "Sending images")}
+            description={t(
+              "editor.sendImageHint",
+              'Hosts the agent may fetch an image from when it uses the "Send image" tool. The agent chooses the URL, so this list is what decides where it can actually go: leave it empty and every attempt is refused. Output guardrails read text and never the picture itself, so this list is the only control over what an image may show. It has no effect unless the tool is granted on the Tools tab.',
+            )}
+          >
+            <FormField
+              label={t("editor.sendImageHosts", "Allowed hosts")}
+              description={t(
+                "editor.sendImageHostsHint",
+                'One per line, e.g. cdn.minhaloja.com.br. Start with "*." to cover a domain and its subdomains (*.minhaloja.com.br). Paste a full URL and only its host is kept.',
+              )}
+            >
+              <Textarea
+                value={sendImage.allowedHosts}
+                onChange={(e) => setSendImage({ allowedHosts: e.target.value })}
+                rows={4}
+                placeholder="cdn.minhaloja.com.br"
+              />
+            </FormField>
+          </Section>
+
+          <Section
             id="limits"
             icon={Gauge}
             title={t("editor.limits", "Execution limits")}
@@ -1314,6 +1528,25 @@ export function BehaviorTab({
                 />
               </FormField>
             </div>
+          </Section>
+
+          <Section
+            id="observability"
+            icon={ScrollText}
+            title={t("editor.observability", "Logs")}
+            description={t(
+              "editor.observabilityHint",
+              'By default a tool line on the Logs page records the SHAPE of each argument and result ({ cpf: "string(11)" }): enough to see which arguments the agent sent, which it left out and whether a format is wrong, with no customer data. Turning the switch on records the values themselves, which is what answers which record it actually looked up, and keeps those values for the whole log retention window, including in every log export. Turn it on while investigating, off afterwards.',
+            )}
+          >
+            <SwitchField
+              checked={observability.logToolValues}
+              onCheckedChange={(v) => setObservability({ logToolValues: v })}
+              label={t(
+                "editor.observabilityLogToolValues",
+                "Log the values sent to tools",
+              )}
+            />
           </Section>
 
           <Section

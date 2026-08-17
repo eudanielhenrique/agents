@@ -3,6 +3,7 @@ import logger from "@/api/lib/logger";
 import basePrisma from "@/api/lib/prisma";
 import { AppError, NotFoundError } from "@/lib/errors";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
+import { stashMediaAnnotation } from "@/modules/chatwoot/annotations";
 import type { ChatwootClient } from "@/modules/chatwoot/client";
 import { loadChatwootClient } from "@/modules/chatwoot/instance";
 import { cleanTranscription } from "@/modules/chatwoot/render";
@@ -17,9 +18,11 @@ import { readSttConfig, type SttConfig } from "./settings";
 
 // Speech-to-text orchestration: download the voice note, transcribe via the configured provider
 // (key from the vault), and write the transcription back onto the Chatwoot attachment meta so the
-// debounce re-fetch reads it (and human agents see it too). We never store the transcription in our
-// own DB — Chatwoot already holds the conversation, consistent with the anti-PII no-body-mirror rule.
-// All network I/O is outside transactions; deps are injectable for tests.
+// debounce re-fetch reads it (and human agents see it too). The meta write-back is a FORK route —
+// on upstream Chatwoot it 404s, so every completed transcription is also stashed in the in-process
+// annotation store (chatwoot/annotations.ts) that the flush overlays (issue #49). We never store
+// the transcription in our own DB — Chatwoot already holds the conversation, consistent with the
+// anti-PII no-body-mirror rule. All network I/O is outside transactions; deps are injectable.
 
 function sysCtx(tenantId: bigint): TenantContext {
   return { tenantId, userId: null, role: "TENANT_ADMIN" };
@@ -130,9 +133,29 @@ export async function transcribeInboundAudio(
     base,
     makeClient: params.deps?.makeClient,
   });
-  const { bytes, contentType } = await client.downloadAttachment(
-    params.dataUrl,
-  );
+  // NOTE: the download sits OUTSIDE the withFlowStage span below, so a failure here used to leave NO
+  // `stt` line at all — the operator saw a turn that answered "não consegui ouvir" with nothing on the
+  // Logs page to explain it. Emit the stage line, then re-throw (the caller decides; see the contract
+  // above). `retryOnMissing` absorbs Chatwoot's write race on a fresh voice note.
+  let bytes: ArrayBuffer;
+  let contentType: string | null;
+  try {
+    ({ bytes, contentType } = await client.downloadAttachment(params.dataUrl, {
+      retryOnMissing: true,
+    }));
+  } catch (err) {
+    if (params.flow) {
+      emitFlowEvent(params.flow, {
+        stage: "stt",
+        level: "warn",
+        status: "error",
+        provider: cfg.provider,
+        detail: { step: "download" },
+        errorMessage: err instanceof Error ? err.message : String(err),
+      });
+    }
+    throw err;
+  }
   const raw = await withFlowStage(
     params.flow,
     "stt",
@@ -151,8 +174,21 @@ export async function transcribeInboundAudio(
   const text = cleanTranscription(raw);
   if (!text) return null;
 
-  // Write back so the debounce re-fetch (and human agents) see it. Best-effort: a write-back failure
-  // should not lose the transcription for the direct path, which uses the returned value.
+  // NOTE: Stash BEFORE the write-back: on upstream Chatwoot (no fork meta route) the in-process
+  // overlay is the only reader that will ever see this transcription (issue #49).
+  stashMediaAnnotation(
+    {
+      tenantId: params.tenantId,
+      instanceId: params.instanceId,
+      messageId: params.messageId,
+    },
+    { transcribedText: text },
+  );
+
+  // NOTE: Write back so the debounce re-fetch (and human agents) see it. Best-effort: a write-back
+  // failure should not lose the transcription — the direct path uses the returned value and the flush reads
+  // the stash above. Surface it on the flow log anyway (a fork operator wants to know the meta is
+  // not landing; an upstream operator learns why Chatwoot shows no transcription).
   try {
     await client.updateAttachmentMeta(
       params.conversationId,
@@ -161,6 +197,16 @@ export async function transcribeInboundAudio(
       { transcribed_text: text },
     );
   } catch (e) {
+    if (params.flow) {
+      emitFlowEvent(params.flow, {
+        stage: "stt",
+        level: "warn",
+        status: "error",
+        provider: cfg.provider,
+        detail: { step: "write_back" },
+        errorMessage: e instanceof Error ? e.message : String(e),
+      });
+    }
     logger.warn(
       "stt: write-back failed (conv=%s msg=%d): %s",
       String(params.conversationId),

@@ -13,16 +13,9 @@
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
-    "incremental": true,
-    // NOTE: the build info must NOT live under node_modules. check-editions.sh
-    // symlinks $ROOT/node_modules into each derived tree, so a path in there is
-    // the SAME file for the master, free and pro trees — same relative paths,
-    // different contents. TypeScript 5.9 tolerated that poisoned build info;
-    // TypeScript 7 fails the pro pass with a bare "TS2589: Type instantiation is
-    // excessively deep and possibly infinite" and no file attached. `.cache` is
-    // gitignored, and the derivation copies untracked-but-not-ignored files
-    // only, so each tree gets its own build info here.
-    "tsBuildInfoFile": "./.cache/tsc/tsbuildinfo",
+    // NOTE: no incremental/tsBuildInfoFile on purpose. Stale build info makes tsgo (TS 7)
+    // intermittently fail with a bare TS2589 (this codebase runs near the instantiation
+    // limit), and the native full check costs ~1s. A TS2589 now is a real error, not cache.
 
     // Best practices
     "strict": true,

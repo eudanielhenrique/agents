@@ -25,15 +25,89 @@ const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 // slow/unreachable — fail fast so the caller can degrade gracefully (serve metadata + a retry).
 const INTERACTIVE_TIMEOUT_MS = 10_000;
 
+// NOTE: Chatwoot fires `message_created` (with the attachment's data_url already in the payload)
+// BEFORE ActiveStorage finishes writing the file, so an immediate GET on a fresh voice note loses the
+// race and the storage service answers 404. Measured on a disk-backed instance: the blob row is
+// committed ~400ms before the file lands, and the eager-media download fires ~70ms after the webhook.
+// These delays cover that window with headroom while staying well inside a typical debounce window.
+// Only 404 is retried (missing file); every other status is a real error and fails immediately.
+const ATTACHMENT_RETRY_DELAYS_MS = [250, 750, 1500];
+
+const realSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
 export class ChatwootApiError extends Error {
   readonly status: number;
   readonly endpoint: string;
-  constructor(status: number, endpoint: string) {
-    // NOTE: never capture the response body — it carries customer PII / message content.
-    super(`Chatwoot API ${status} for ${endpoint}`);
+  constructor(status: number, endpoint: string, detail?: string) {
+    // NOTE: `detail` is ONLY ever an auth failure's reason (see authFailureDetail) — the response body
+    // of any other status carries customer PII / message content and must never reach this message.
+    super(
+      detail
+        ? `Chatwoot API ${status} for ${endpoint}: ${detail}`
+        : `Chatwoot API ${status} for ${endpoint}`,
+    );
     this.name = "ChatwootApiError";
     this.status = status;
     this.endpoint = endpoint;
+  }
+}
+
+// Raised INSTEAD of dialing Chatwoot when the client holds no token for the call it was asked to
+// make. Distinct from ChatwootApiError on purpose: nothing was sent, so there is no status, and the
+// fault is local (a caller that built the client without the token) rather than remote.
+export class ChatwootMissingTokenError extends Error {
+  readonly endpoint: string;
+  constructor(endpoint: string) {
+    super(`Chatwoot client has no token for ${endpoint}`);
+    this.name = "ChatwootMissingTokenError";
+    this.endpoint = endpoint;
+  }
+}
+
+// An auth failure names three very different operator actions under ONE status. Checked against the
+// fork's source (chatwoot-pro at 4.16.2): `render_unauthorized(message)` answers `{error: message}`
+// with **401** for both "Invalid Access Token" (the token is absent or wrong) and "Access to this
+// endpoint is not authorized for bots" (the endpoint is outside BOT_ACCESSIBLE_ENDPOINTS), so the
+// status alone cannot tell a missing credential from a forbidden endpoint. Every `status: :forbidden`
+// in that tree renders a fixed English string the same way ("API access is not enabled for this
+// account", "Access Denied", …), and none of those bodies carries conversation or contact data.
+//
+// That is why the body is read HERE and only here, and even here nothing from it is ever repeated:
+// the parsed reason has to MATCH one of the strings below to be named. Parsing as JSON does not prove
+// the response came from Chatwoot — the base URL is tenant-configured and a proxy in front of it can
+// answer whatever it likes, including `{"error":"<customer data>"}`, which would land in shared logs
+// through the callers' `errMsg(err)`. An allowlist keeps the three cases this exists to separate and
+// gives up on everything else, which is exactly the old behavior for anything unrecognized.
+const KNOWN_AUTH_REASONS: ReadonlySet<string> = new Set([
+  // access_token_auth_helper.rb: the token is blank or matches no user.
+  "Invalid Access Token",
+  // access_token_auth_helper.rb: the endpoint is outside BOT_ACCESSIBLE_ENDPOINTS.
+  "Access to this endpoint is not authorized for bots",
+  // ensure_current_account_helper.rb: the bot belongs to another account.
+  "Bot is not authorized to access this account",
+  // accounts/base_controller.rb, on a 403.
+  "API access is not enabled for this account",
+]);
+
+async function authFailureDetail(res: Response): Promise<string | undefined> {
+  if (res.status !== 401 && res.status !== 403) return undefined;
+  try {
+    const text = (await res.text()).trim();
+    if (!text) return undefined;
+    let message: string;
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown; message?: unknown };
+      const field = parsed?.error ?? parsed?.message;
+      if (typeof field !== "string") return undefined;
+      message = field;
+    } catch {
+      // NOTE: a body that does not parse did not come from Chatwoot's renderer at all.
+      return "unrecognized reason (an intermediary, not Chatwoot?)";
+    }
+    return KNOWN_AUTH_REASONS.has(message) ? message : "unrecognized reason";
+  } catch {
+    return undefined;
   }
 }
 
@@ -47,6 +121,15 @@ export interface ChatwootClientConfig {
 export interface ChatwootClientDeps {
   fetchImpl?: typeof fetch;
   assertSafe?: (url: string) => Promise<URL>;
+}
+
+export interface AttachmentDownloadOptions {
+  // Opt-in bounded retry for the write race described on ATTACHMENT_RETRY_DELAYS_MS. The eager media
+  // path (STT/vision, right off the webhook) sets it; the interactive media proxy does NOT — there a
+  // 404 means the attachment is really gone and the operator must not wait out the backoff.
+  retryOnMissing?: boolean;
+  // Injectable for tests (no real waiting).
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export type ChatwootMessageType = "outgoing" | "incoming";
@@ -125,6 +208,15 @@ export class ChatwootClient {
     this.accountBase = `${root}/api/v1/accounts/${config.accountId}`;
   }
 
+  // A client can legitimately be built with only the admin token (callers that never act as the
+  // persona). Sending the empty one anyway is what issue #79 was: Chatwoot answers 401 and a
+  // best-effort catch reports it as if the remote had rejected a real credential. Refusing here names
+  // the actual fault — this process built a client without the token this call needs. Called by
+  // `request` AND by the multipart senders, which build their own fetch and would otherwise slip past.
+  private assertToken(token: string, endpoint: string): void {
+    if (token === "") throw new ChatwootMissingTokenError(endpoint);
+  }
+
   private async request(
     token: string,
     method: string,
@@ -132,6 +224,7 @@ export class ChatwootClient {
     body?: unknown,
     timeoutMs: number = REQUEST_TIMEOUT_MS,
   ): Promise<unknown> {
+    this.assertToken(token, `${method} ${path}`);
     const res = await this.fetchImpl(`${this.accountBase}${path}`, {
       method,
       headers: {
@@ -143,7 +236,13 @@ export class ChatwootClient {
       redirect: "error",
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!res.ok) throw new ChatwootApiError(res.status, `${method} ${path}`);
+    if (!res.ok) {
+      throw new ChatwootApiError(
+        res.status,
+        `${method} ${path}`,
+        await authFailureDetail(res),
+      );
+    }
     const text = await res.text();
     return text ? JSON.parse(text) : null;
   }
@@ -183,6 +282,7 @@ export class ChatwootClient {
     mime: string,
     opts: { transcribedText?: string } = {},
   ): Promise<unknown> {
+    this.assertToken(this.config.botToken, "POST audio message");
     const form = new FormData();
     form.append("attachments[]", new Blob([audio], { type: mime }), fileName);
     form.append("message_type", "outgoing");
@@ -203,7 +303,13 @@ export class ChatwootClient {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       },
     );
-    if (!res.ok) throw new ChatwootApiError(res.status, "POST audio message");
+    if (!res.ok) {
+      throw new ChatwootApiError(
+        res.status,
+        "POST audio message",
+        await authFailureDetail(res),
+      );
+    }
     const text = await res.text();
     return text ? JSON.parse(text) : null;
   }
@@ -219,6 +325,7 @@ export class ChatwootClient {
     mime: string,
     opts: { caption?: string } = {},
   ): Promise<unknown> {
+    this.assertToken(this.config.botToken, "POST file attachment");
     const form = new FormData();
     form.append("attachments[]", new Blob([bytes], { type: mime }), fileName);
     form.append("message_type", "outgoing");
@@ -233,7 +340,13 @@ export class ChatwootClient {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       },
     );
-    if (!res.ok) throw new ChatwootApiError(res.status, "POST file attachment");
+    if (!res.ok) {
+      throw new ChatwootApiError(
+        res.status,
+        "POST file attachment",
+        await authFailureDetail(res),
+      );
+    }
     const text = await res.text();
     return text ? JSON.parse(text) : null;
   }
@@ -620,8 +733,10 @@ export class ChatwootClient {
   // Storage-backend redirects (e.g. S3) are followed; a size cap bounds memory. NOTE: redirect
   // targets are not re-validated (TOCTOU) — the data_url comes from the HMAC-authenticated webhook
   // of the tenant's own Chatwoot, the same trust as every other call to this instance.
+  // `opts.retryOnMissing` retries a 404 on the backoff above (the file-not-written-yet race).
   async downloadAttachment(
     dataUrl: string,
+    opts: AttachmentDownloadOptions = {},
   ): Promise<{ bytes: ArrayBuffer; contentType: string | null }> {
     await assertSafeOutboundUrl(dataUrl);
     let sameHost = false;
@@ -630,20 +745,30 @@ export class ChatwootClient {
     } catch {
       throw new ChatwootApiError(400, "GET attachment");
     }
-    const res = await this.fetchImpl(dataUrl, {
-      method: "GET",
-      headers: sameHost
-        ? { [CHATWOOT_AUTH_HEADER]: this.config.adminToken }
-        : {},
-      redirect: "follow",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    if (!res.ok) throw new ChatwootApiError(res.status, "GET attachment");
-    const bytes = await res.arrayBuffer();
-    if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
-      throw new ChatwootApiError(413, "GET attachment");
+    const delays = opts.retryOnMissing ? ATTACHMENT_RETRY_DELAYS_MS : [];
+    const sleep = opts.sleep ?? realSleep;
+    for (let attempt = 0; ; attempt++) {
+      const res = await this.fetchImpl(dataUrl, {
+        method: "GET",
+        headers: sameHost
+          ? { [CHATWOOT_AUTH_HEADER]: this.config.adminToken }
+          : {},
+        redirect: "follow",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      if (res.ok) {
+        const bytes = await res.arrayBuffer();
+        if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
+          throw new ChatwootApiError(413, "GET attachment");
+        }
+        return { bytes, contentType: res.headers.get("content-type") };
+      }
+      const delay = delays[attempt];
+      if (res.status !== 404 || delay === undefined) {
+        throw new ChatwootApiError(res.status, "GET attachment");
+      }
+      await sleep(delay);
     }
-    return { bytes, contentType: res.headers.get("content-type") };
   }
 
   // The account's display name (admin token). `GET /api/v1/accounts/:id` (the account-base root)
@@ -1090,7 +1215,13 @@ export async function fetchChatwootProfile(
     redirect: "error",
     signal: AbortSignal.timeout(INTERACTIVE_TIMEOUT_MS),
   });
-  if (!res.ok) throw new ChatwootApiError(res.status, "GET /profile");
+  if (!res.ok) {
+    throw new ChatwootApiError(
+      res.status,
+      "GET /profile",
+      await authFailureDetail(res),
+    );
+  }
   const text = await res.text();
   return text ? JSON.parse(text) : null;
 }

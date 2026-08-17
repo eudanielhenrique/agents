@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@/../generated/prisma/client";
 import { setPublisher, TOPICS } from "@/api/features/realtime/realtime.service";
+import config from "@/config";
 import { buildNativeTools } from "@/graph/tools/native";
 import type { TenantContext } from "@/lib/tenancy";
 import {
@@ -12,6 +13,7 @@ import {
   getAgentToolSelections,
   listAgents,
   listAgentsPaged,
+  PromptTooLongError,
   replaceAgentToolSelections,
   updateAgent,
 } from "@/modules/agents/service";
@@ -114,6 +116,42 @@ describe.skipIf(!dbUp)("agents service", () => {
     );
     expect(a.systemPrompt).toBe("Be concise.");
     expect(a.enabled).toBe(false);
+  });
+
+  // The editor tells the operator to paste a full URL and promises only the host is kept, and
+  // `readSendImageConfig` does that — at READ time. What lands in the row is whatever was typed, so
+  // a pasted presigned link stored its signature in `agent.settings` and handed it back to the
+  // editor on the next load. Normalizing on the way IN is what makes the promise true.
+  test("a pasted image URL is reduced to its host before it is stored", async () => {
+    await updateAgent(
+      ctx(tenantA),
+      agentAId,
+      {
+        settings: {
+          sendImage: {
+            allowedHosts: [
+              "https://usuario:senha-secreta@cdn.loja.com.br/fotos/x.png?X-Amz-Signature=deadbeef",
+              "  *.IMAGENS.com.br  ",
+              "localhost",
+            ],
+          },
+        },
+      },
+      appDb,
+    );
+    const row = await suDb.agent.findFirstOrThrow({
+      where: { id: agentAId },
+      select: { settings: true },
+    });
+    const stored = (row.settings as Record<string, unknown>).sendImage as {
+      allowedHosts: string[];
+    };
+    expect(stored.allowedHosts).toEqual([
+      "cdn.loja.com.br",
+      "*.imagens.com.br",
+    ]);
+    expect(JSON.stringify(row.settings)).not.toContain("senha-secreta");
+    expect(JSON.stringify(row.settings)).not.toContain("deadbeef");
   });
 
   test("a tenant cannot read another tenant's agent", async () => {
@@ -288,6 +326,38 @@ describe.skipIf(!dbUp)("agents create/clone/delete/tool-selections", () => {
     expect(a.enabled).toBe(true);
     // New agents are born in test mode (operator opt-in before going live).
     expect(a.mode).toBe("test");
+  });
+
+  // The same storage invariant on the CREATE path: an agent can be born with a host list, and the
+  // promise that only the host is kept has to hold there too.
+  test("a pasted image URL is reduced to its host on creation as well", async () => {
+    const a = await createAgent(
+      ctx(tenantC),
+      {
+        name: "Com imagem",
+        modelConfig: { provider: "openai", model: "gpt-4o-mini" },
+        settings: {
+          sendImage: {
+            allowedHosts: [
+              "https://usuario:senha-secreta@cdn.loja.com.br/x.png?sig=deadbeef",
+            ],
+          },
+        },
+      },
+      appDb,
+    );
+    const row = await suDb.agent.findFirstOrThrow({
+      where: { id: BigInt(a.id) },
+      select: { settings: true },
+    });
+    expect(
+      (
+        (row.settings as Record<string, unknown>).sendImage as {
+          allowedHosts: string[];
+        }
+      ).allowedHosts,
+    ).toEqual(["cdn.loja.com.br"]);
+    expect(JSON.stringify(row.settings)).not.toContain("senha-secreta");
   });
 
   test("create without modelConfig applies the default model config", async () => {
@@ -719,5 +789,37 @@ describe.skipIf(!dbUp)("agents create/clone/delete/tool-selections", () => {
         appDb,
       ),
     ).rejects.toThrow();
+  });
+
+  test("create/update reject a system prompt over the cap with the localized error", async () => {
+    const boom = "p".repeat(config.agent.promptMaxChars + 1);
+    try {
+      await createAgent(
+        ctx(tenantC),
+        { name: "TooBig", systemPrompt: boom },
+        appDb,
+      );
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(PromptTooLongError);
+      expect((e as PromptTooLongError).statusCode).toBe(400);
+      expect((e as PromptTooLongError).translationKey).toBe(
+        "errors.promptTooLong",
+      );
+    }
+    const a = await createAgent(ctx(tenantC), { name: "CapProbe" }, appDb);
+    await expect(
+      updateAgent(ctx(tenantC), BigInt(a.id), { systemPrompt: boom }, appDb),
+    ).rejects.toThrow(/system prompt is too long/);
+  });
+
+  test("a system prompt exactly at the cap is accepted", async () => {
+    const max = "p".repeat(config.agent.promptMaxChars);
+    const a = await createAgent(
+      ctx(tenantC),
+      { name: "AtCap", systemPrompt: max },
+      appDb,
+    );
+    expect(a.systemPrompt).toHaveLength(config.agent.promptMaxChars);
   });
 });

@@ -5,19 +5,22 @@ import basePrisma from "@/api/lib/prisma";
 import { modelConfigSchema } from "@/graph/model-config";
 import { AppError, NotFoundError } from "@/lib/errors";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
-import { isTestSilenced } from "@/modules/agents/test-mode";
+import { loadAppointmentContext } from "@/modules/appointments/context";
 import {
   isOutOfHoursNow,
   nextOpenAt,
   parseWindows,
 } from "@/modules/business-hours/hours";
 import { readChannelRedirectConfig } from "@/modules/channel-redirect/service";
+import type { ChatwootClient } from "@/modules/chatwoot/client";
 import {
   type LoadChatwootClientDeps,
   loadAgentBot,
   loadChatwootClient,
 } from "@/modules/chatwoot/instance";
-import { shouldBotHandle } from "@/modules/chatwoot/normalize";
+import { parseLiveConversation } from "@/modules/chatwoot/normalize";
+import { reconcileMirrorFromLive } from "@/modules/chatwoot/reconcile";
+import { isFollowUpLive } from "@/modules/followups/eligibility";
 import type { FollowUpDelayUnit } from "@/modules/followups/settings";
 import {
   isNewFollowUpEpisode,
@@ -508,6 +511,22 @@ export interface ConversationDetail {
     // conversation carries one (the entry/WhatsApp side is re-engaged by the gate re-sending the link on
     // the next inbound, not a scheduled job). null = none pending (or not the widget side).
     redirectNext: { stage: "chat" | "whatsapp"; runAt: string } | null;
+    // The agent pauses re-engagement while the contact has a live appointment
+    // (followUp.pauseWhileAppointment, on by default), so the sweep skips this conversation and the
+    // handler reschedules an already-armed job. Surfaced instead of a countdown that never fires:
+    // an indicator that promises a follow-up the sweep suppresses is indistinguishable from a broken
+    // scheduler, which is the worst failure mode for an indicator whose whole job is to be trusted.
+    pausedByAppointment: boolean;
+    // A follow-up job IS armed for this conversation and the handler will drop it when it claims it
+    // (isFollowUpLive: agent enabled, follow-up on, not redirect-managed, not test-silenced, bot
+    // still owns the conversation). Nothing is coming, but nothing completed either — so the console
+    // must show neither a countdown nor the "sequence complete" marker.
+    //
+    // It is keyed on a job EXISTING, not on liveness alone, because the two look identical from the
+    // outside and mean opposite things: a sequence whose last step is configured to resolve the
+    // conversation ends with the bot no longer owning it, which is a completed sequence, not an
+    // abandoned one. What separates them is whether a step is still queued.
+    abandoned: boolean;
   } | null;
   // Pending appointment reminders for THIS conversation (deterministic Calendar-booked reminders), for
   // an operator-facing "a reminder is scheduled" indicator. One entry per pending scheduler job, soonest
@@ -749,13 +768,97 @@ async function updateMirror(
   );
 }
 
+// The conversation state as it stands after a console write, when the live read decided it. null =
+// the read did not decide (it failed, carried no version, or was rejected by activity alone), so the
+// caller's own intent is what was written and what it should announce.
+interface ConsoleWriteState {
+  status: string;
+  assigneeId: number | null;
+  assigneeType: string | null;
+  assigneeName: string | null;
+  lastEventAt: Date | null;
+}
+
+// Writes the mirror after a console action, claiming the version Chatwoot produced for it.
+//
+// The two write endpoints do not serialize the conversation's `updated_at` (assignments renders the
+// agent, toggle_status a status blob), so a write applied straight from what we asked for lands with
+// no version at all. An event Chatwoot serialized BEFORE the click and is still retrying then arrives
+// carrying a higher version and the pre-click truth, and the mirror accepts it — undoing the handoff
+// or the resolve until Chatwoot's own event for the action arrives, or permanently if that delivery
+// is lost. While the row is wrong the runtime's ownership recheck reads it, so the bot can answer on
+// top of the human (issue #77).
+//
+// Reading the conversation back is what closes it: the REST show DOES render the same
+// `updated_at.to_f` the webhook carries, so the local write can be ordered by the same key everything
+// else uses, with no clock of ours involved. The cost is one extra GET per console action.
+//
+// The version is an improvement on the write, not a precondition for it: when the read fails or the
+// payload does not parse, fall back to the blind write so the console still reflects what the
+// operator just did — exactly the behavior that preceded this.
+async function mirrorConsoleWrite(
+  ctx: TenantContext,
+  base: PrismaClient,
+  id: bigint,
+  conv: { chatwootInstanceId: bigint; chatwootConversationId: number },
+  client: ChatwootClient,
+  fallback: {
+    status?: string;
+    assigneeId?: number | null;
+    assigneeType?: string | null;
+  },
+): Promise<ConsoleWriteState | null> {
+  const tenantId = requireTenant(ctx);
+  try {
+    const live = parseLiveConversation(
+      await client.getConversation(conv.chatwootConversationId),
+    );
+    // A snapshot with no version buys nothing here and can cost: without one, the reconcile applies
+    // the WHOLE snapshot, so a status click could carry back an assignee that a webhook has since
+    // changed. The fallback writes exactly the fields this action meant to change, which is what the
+    // console did before any of this.
+    if (live && live.updatedAt !== null) {
+      const outcome = await reconcileMirrorFromLive({
+        tenantId,
+        instanceId: conv.chatwootInstanceId,
+        conversationId: conv.chatwootConversationId,
+        live,
+        base,
+      });
+      // Applied, or beaten by a stored version: either way the row now holds the newest thing known,
+      // and the caller must announce THAT rather than what the click asked for.
+      if (outcome.applied || outcome.outrankedByVersion) return outcome.state;
+      // Nothing landed and no version decided it — the coarse activity comparison rejected a
+      // conversation this process just wrote to Chatwoot, which is not evidence of anything newer.
+      // Falling through leaves the operator's action absent from the mirror, and the runtime's
+      // ownership recheck reads this row.
+      logger.warn(
+        "conversations: live read after a console write was rejected by activity alone (conv=%s) — writing unversioned",
+        String(conv.chatwootConversationId),
+      );
+    } else {
+      logger.warn(
+        "conversations: live read after a console write carried no usable version (conv=%s) — writing unversioned",
+        String(conv.chatwootConversationId),
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      { err, conversationId: String(conv.chatwootConversationId) },
+      "conversations: live read after a console write failed — writing unversioned",
+    );
+  }
+  await updateMirror(ctx, base, id, fallback);
+  return null;
+}
+
 // Metadata only — fast scoped DB read, NO network. The UI renders the shell from this immediately.
 export async function getConversationDetail(
   ctx: TenantContext,
   id: bigint,
   base: PrismaClient = basePrisma,
 ): Promise<ConversationDetail> {
-  requireTenant(ctx);
+  const tenantId = requireTenant(ctx);
   const conv = await loadConvRef(ctx, id, base);
   // Resolve the bound persona's name (separate read — Inbox carries only agentId, no relation).
   const agentId = conv.inbox?.agentId ?? null;
@@ -766,11 +869,13 @@ export async function getConversationDetail(
             where: { id: agentId },
             select: {
               name: true,
+              enabled: true,
               mode: true,
               settings: true,
               modelConfig: true,
               businessHoursId: true,
               followUpHoursId: true,
+              followUpArmedAt: true,
             },
           }),
         )
@@ -792,6 +897,18 @@ export async function getConversationDetail(
       inboxCwId != null &&
       (redirectCfg.widgetInboxId === inboxCwId ||
         redirectCfg.entryInboxId === inboxCwId);
+    // Whether a follow-up for this conversation is alive AT ALL, by the same predicate the handler
+    // re-checks when it claims the job. Both branches below are gated on it: the estimate because the
+    // sweep would never enqueue it, and the armed job because the handler would drop it (issue #72).
+    const followUpLive = isFollowUpLive({
+      agentEnabled: agent?.enabled ?? false,
+      followUpEnabled: cfg.enabled,
+      managedByRedirect,
+      agentMode: agent?.mode ?? "production",
+      testActivatedAt: conv.testActivatedAt,
+      status: conv.status,
+      assigneeType: conv.assigneeType,
+    });
     const isRedirectWidgetConv =
       redirectCfg.enabled &&
       inboxCwId != null &&
@@ -829,10 +946,20 @@ export async function getConversationDetail(
     // step is "2d". The tooltip uses this to explain the deferral.
     let nextRunAtDeferred = false;
     const firstStep = cfg.steps[0];
-    if (job) {
-      const rawStep = (job.payload as { stepIndex?: unknown } | null)
-        ?.stepIndex;
-      const stepIndex = typeof rawStep === "number" ? rawStep : 0;
+    // NOTE: A PENDING step-0 job enqueued before a re-arm will be DROPPED by the handler's
+    // activation fence — the estimate must not promise it. Later steps stay exempt (an in-flight
+    // sequence legitimately outlives a re-arm), mirroring followUpHandler.
+    const rawStep = (job?.payload as { stepIndex?: unknown } | null)?.stepIndex;
+    const jobStepIndex =
+      typeof rawStep === "number" && Number.isInteger(rawStep) ? rawStep : 0;
+    const fencedStep0Job =
+      job != null &&
+      jobStepIndex === 0 &&
+      (agent?.followUpArmedAt == null ||
+        conv.lastInboundAt == null ||
+        conv.lastInboundAt < agent.followUpArmedAt);
+    if (job && !fencedStep0Job && followUpLive) {
+      const stepIndex = jobStepIndex;
       nextStep = stepIndex + 1;
       // job.runAt is NOT the firing time yet — the sweep enqueues step 0 with runAt=now (and re-arms
       // it on EVERY pass), so a freshly-swept job's runAt sits before the real cadence AND outside the
@@ -863,16 +990,15 @@ export async function getConversationDetail(
       // test-silenced, and we know when the conversation last moved. The episode predicate MUST match
       // the sweep/handler (isNewFollowUpEpisode) or the indicator disagrees with what actually fires.
       // (managedByRedirect already forces job=null; guard the estimate too so it stays suppressed.)
-      !managedByRedirect &&
-      cfg.enabled &&
+      followUpLive &&
       firstStep &&
       isNewFollowUpEpisode(conv.lastFollowUpAt, conv.lastInboundAt) &&
-      conv.lastEventAt &&
-      shouldBotHandle({
-        status: conv.status,
-        assigneeType: conv.assigneeType,
-      }) &&
-      !isTestSilenced(agent?.mode ?? "production", conv.testActivatedAt)
+      // NOTE: Activation fence (mirrors the sweep SQL): no estimate for an episode that began before
+      // follow-up was armed — the sweep will never enqueue it, so the indicator must not promise it.
+      agent?.followUpArmedAt != null &&
+      conv.lastInboundAt != null &&
+      conv.lastInboundAt >= agent.followUpArmedAt &&
+      conv.lastEventAt
     ) {
       nextStep = 1;
       let dueAt = new Date(
@@ -888,6 +1014,39 @@ export async function getConversationDetail(
       if (dueAt.getTime() > ungated) nextRunAtDeferred = true;
       nextRunAt = dueAt.toISOString();
     }
+    // A live appointment suppresses BOTH shapes: the sweep never enqueues the estimated step, and an
+    // already-armed job is rescheduled by the handler for as long as the appointment stands, so its
+    // countdown would just slip an hour at a time. Show the reason instead of a time that never comes.
+    //
+    // NOTE: read from the SAME source the handler uses (loadAppointmentContext via
+    // hasLiveAppointment), instead of a third hand-kept copy of the predicate. The estimate and the
+    // sweep have now drifted twice — the suppression itself in #39, and this indicator in #60 — so
+    // anything else here would be the third.
+    //
+    // The `nextStep` guard is what makes the flag mean "the appointment is hiding something": every
+    // OTHER reason the follow-up will not run (conversation resolved or taken by a human, episode
+    // older than the arming, agent test-silenced, sequence already finished) leaves nextStep null on
+    // its own, and announcing "paused by appointment" there would state a reason that is not the
+    // reason — and, because the completion marker yields to this flag, would hide a finished sequence
+    // behind it. It also skips the query on every conversation with nothing to suppress.
+    const pausedByAppointment =
+      nextStep !== null &&
+      cfg.enabled &&
+      cfg.pauseWhileAppointment &&
+      !managedByRedirect &&
+      (await runScopedOn(
+        base,
+        ctx,
+        async (db) =>
+          (await loadAppointmentContext(db, tenantId, conv.threadId)).length >
+          0,
+      ));
+    if (pausedByAppointment) {
+      nextStep = null;
+      nextRunAt = null;
+      nextRunAtDeferred = false;
+    }
+
     // The pending redirect follow-up, keyed to the WIDGET conversation's thread (the entry/WhatsApp
     // side has no job of its own). Surfaced in place of the — suppressed — generic estimate.
     let redirectNext: { stage: "chat" | "whatsapp"; runAt: string } | null =
@@ -934,6 +1093,8 @@ export async function getConversationDetail(
           : null,
       managedByRedirect,
       redirectNext,
+      pausedByAppointment,
+      abandoned: job !== null && !followUpLive,
     };
   }
 
@@ -1217,18 +1378,22 @@ export async function handoffConversation(
   await client.toggleStatus(conv.chatwootConversationId, "open", {
     asAdmin: true,
   });
-  await updateMirror(ctx, base, id, {
+  const state = await mirrorConsoleWrite(ctx, base, id, conv, client, {
     status: "open",
     assigneeType: "User",
     ...(assigneeId !== null ? { assigneeId } : {}),
   });
-  // Optimistic realtime feedback (the inbound webhook reconciles canonically).
+  // Optimistic realtime feedback (the inbound webhook reconciles canonically). It announces the row
+  // as STORED, not as asked for: the two differ when the live read came back with something else
+  // (an assignment Chatwoot resolved differently, or a webhook that outranked this write), and a
+  // publication of the intent would arrive last and leave the console showing a state nobody holds.
   broadcastConversationEvent(tenantId, {
     conversationId: `c_${String(id)}`,
-    status: "open",
-    assigneeId: assigneeId ?? conv.assigneeId,
-    assigneeType: "User",
-    lastEventAt: conv.lastEventAt ? conv.lastEventAt.toISOString() : null,
+    status: state?.status ?? "open",
+    assigneeId: state ? state.assigneeId : (assigneeId ?? conv.assigneeId),
+    assigneeType: state ? state.assigneeType : "User",
+    lastEventAt:
+      (state ? state.lastEventAt : conv.lastEventAt)?.toISOString() ?? null,
   });
 }
 
@@ -1256,17 +1421,18 @@ export async function returnConversationToAgent(
   await client.toggleStatus(conv.chatwootConversationId, "pending", {
     asAdmin: true,
   });
-  await updateMirror(ctx, base, id, {
+  const state = await mirrorConsoleWrite(ctx, base, id, conv, client, {
     status: "pending",
     assigneeId: null,
     assigneeType: null,
   });
   broadcastConversationEvent(tenantId, {
     conversationId: `c_${String(id)}`,
-    status: "pending",
-    assigneeId: null,
-    assigneeType: null,
-    lastEventAt: conv.lastEventAt ? conv.lastEventAt.toISOString() : null,
+    status: state?.status ?? "pending",
+    assigneeId: state ? state.assigneeId : null,
+    assigneeType: state ? state.assigneeType : null,
+    lastEventAt:
+      (state ? state.lastEventAt : conv.lastEventAt)?.toISOString() ?? null,
   });
 }
 
@@ -1287,13 +1453,16 @@ export async function setConversationStatus(
   await client.toggleStatus(conv.chatwootConversationId, status, {
     asAdmin: true,
   });
-  await updateMirror(ctx, base, id, { status });
+  const state = await mirrorConsoleWrite(ctx, base, id, conv, client, {
+    status,
+  });
   broadcastConversationEvent(tenantId, {
     conversationId: `c_${String(id)}`,
-    status,
-    assigneeId: conv.assigneeId,
-    assigneeType: conv.assigneeType,
-    lastEventAt: conv.lastEventAt ? conv.lastEventAt.toISOString() : null,
+    status: state?.status ?? status,
+    assigneeId: state ? state.assigneeId : conv.assigneeId,
+    assigneeType: state ? state.assigneeType : conv.assigneeType,
+    lastEventAt:
+      (state ? state.lastEventAt : conv.lastEventAt)?.toISOString() ?? null,
   });
 }
 

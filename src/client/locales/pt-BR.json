@@ -175,6 +175,13 @@
     "actionError": "A ação falhou.",
     "approve": "Aprovar",
     "approved": "Sugestão aprovada e adicionada.",
+    "edit": "Editar",
+    "editContent": "Conteúdo",
+    "editContentHint": "Este texto é guardado na base de conhecimento exatamente como está escrito. Deixe uma afirmação que se sustenta sozinha, sem ressalvas pedindo para confirmar.",
+    "edited": "Sugestão atualizada.",
+    "editError": "Não foi possível salvar a edição.",
+    "editGone": "Outra pessoa já revisou esta sugestão.",
+    "editTitle": "Título",
     "error": "Não foi possível carregar a fila de aprovação.",
     "fromConversation": "Da conversa: {{label}}",
     "fromPlayground": "Do playground de {{name}}",
@@ -225,6 +232,9 @@
     "accountsSaveError": "Não foi possível atualizar as contas.",
     "adminToken": "Token de acesso admin",
     "adminTokenHint": "Armazenado criptografado, nunca exibido novamente.",
+    "autoSynced_one": "{{count}} inbox nova sincronizada do Chatwoot.",
+    "autoSynced_many": "{{count}} inboxes novas sincronizadas do Chatwoot.",
+    "autoSynced_other": "{{count}} inboxes novas sincronizadas do Chatwoot.",
     "baseUrl": "URL base",
     "bindError": "Não foi possível atualizar a caixa de entrada.",
     "bindLabel": "Agente que responde",
@@ -362,6 +372,8 @@
       "done": "Sequência de follow-up concluída",
       "imminent": "a qualquer momento",
       "imminentHint": "O horário estimado já passou; o envio roda em segundo plano, então o follow-up será enviado a qualquer momento.",
+      "pausedAppointment": "Follow-up pausado · compromisso agendado",
+      "pausedAppointmentHint": "O contato tem um compromisso agendado, e este agente pausa a reativação até ele passar ou ser cancelado. Depois disso a sequência volta sozinha.",
       "redirectHint": "O canal desta conversa é gerenciado pelo redirecionamento, então o follow-up padrão não roda aqui. O redirecionamento reengaja o lead entre o WhatsApp e o chat do site.",
       "redirectManaged": "Reengajamento gerenciado pelo Redirecionamento",
       "redirectScheduled": "Follow-up do redirecionamento · {{stage}} · {{when}} · {{at}}",
@@ -540,6 +552,17 @@
   },
   "editor": {
     "always": "Sempre ativo",
+    "attributeContext": "Dados no contexto",
+    "attributeContextContact": "Contato",
+    "attributeContextContactHint": "Atributos do cliente, mantidos em todas as conversas dele.",
+    "attributeContextConversation": "Conversa",
+    "attributeContextConversationHint": "Atributos desta conversa (zeram a cada conversa nova).",
+    "attributeContextHint": "Atributos personalizados do Chatwoot cujos valores ATUAIS o agente enxerga a cada turno, para saber o que já foi coletado e o que ainda falta. Escolha só o que importa para o atendimento: tudo que for selecionado entra no prompt. O agente só grava de volta se tiver a ferramenta \"Definir atributo\"; sem ela, os valores entram como contexto somente leitura.",
+    "attributeContextMultiAccount": "Este agente atende mais de uma conta do Chatwoot, então a lista mistura atributos de contas diferentes. Digite cada chave exatamente como ela aparece.",
+    "attributeContextPlaceholder": "Adicionar um atributo…",
+    "attributeContextSearch": "Buscar atributos…",
+    "attributeContextTask": "Card do Kanban",
+    "attributeContextTaskHint": "Atributos do card ligado a esta conversa, quando existir.",
     "attrInstructions": "Orientação de uso",
     "attrInstructionsHint": "Opcional. Explica qual atributo definir na conversa, no contato ou no card do kanban, e quando. A IA já vê os atributos definidos; isto acrescenta suas regras. Anexado à descrição da ferramenta.",
     "attrInstructionsPlaceholder": "ex.: salve o orçamento qualificado no contato como \"orcamento\"; defina \"lead_stage\" no card.",
@@ -749,6 +772,8 @@
       "actionTemplate": "Responder com mensagem template",
       "checkAdherence": "Aderência às instruções do agente",
       "checkCompetitors": "Menção a concorrentes",
+      "checkRelevance": "A resposta responde o que o cliente perguntou",
+      "checkRelevanceHint": "Envia a mensagem do cliente para o agente de guardrails poder comparar. Desligado por padrão: depois de uma mensagem curta como “sim”, uma resposta correta pode parecer resposta a outra pergunta, e a ação acima trocaria ela. Ligada junto de outra checagem, ela roda numa segunda chamada ao modelo de guardrails: a revisão de saída passa a custar duas chamadas por turno, feitas em paralelo. Quando ela dispara, a ação usa sempre a mensagem template: não há resposta para reescrever, e deixar o modelo inventar uma resposta produz fato inventado.",
       "checks": "Checagens",
       "checkToxicity": "Toxicidade / abuso",
       "checkUnsafe": "Conteúdo inseguro",
@@ -773,7 +798,8 @@
       "outputDesc": "Analisa a resposta do agente antes de enviá-la.",
       "policy": "Política",
       "policyDesc": "Lista de concorrentes e instruções extras usadas pelas checagens.",
-      "template": "Mensagem template"
+      "template": "Mensagem template",
+      "templateFallbackHint": "Enviada sempre que nenhuma resposta substituta é escrita: quando o modelo não devolve nenhuma, e sempre que a checagem de relevância for a que disparou, porque aí não há resposta para reescrever."
     },
     "handoffInstructions": "Instruções de transferência",
     "handoffInstructionsHint": "Opcional. Centraliza a lógica de transferência (quando e para quem escalar). Anexado à descrição da ferramenta de transferência que a IA lê.",
@@ -833,6 +859,7 @@
     "mode": "Modo",
     "modeHint": "Um agente em teste fica em silêncio na conversa até o cliente enviar /teste; em produção responde normalmente.",
     "model": "Modelo",
+    "modelPickerProviderDefault": "Padrão do provedor",
     "modelPickerSearch": "Buscar modelos…",
     "modelRequired": "Escolha um modelo para este provedor antes de salvar.",
     "modelSection": "Modelo",
@@ -840,6 +867,9 @@
     "modeProduction": "Produção",
     "modeTest": "Teste",
     "name": "Nome",
+    "observability": "Logs",
+    "observabilityHint": "Por padrão, a linha de uma ferramenta na página de Logs registra a FORMA de cada argumento e do resultado ({ cpf: \"string(11)\" }): o suficiente para ver quais argumentos o agente enviou, quais deixou de fora e se algum formato está errado, sem dado de cliente. Ligando a chave, ela passa a registrar os valores em si, que é o que responde qual registro ele consultou de fato, e guarda esses valores por toda a retenção do log, inclusive em cada exportação. Ligue enquanto investiga e desligue depois.",
+    "observabilityLogToolValues": "Registrar os valores enviados às ferramentas",
     "openPlayground": "Testar no playground",
     "overwriteAnyway": "Salvar assim mesmo",
     "pixHint": "Usado tanto por 'Enviar chave PIX' quanto por 'Solicitar pagamento'. A IA nunca escolhe ou digita essa chave — só o que está configurado aqui é enviado.",
@@ -865,6 +895,9 @@
     "promptViewToggle": "Editor ou pré-visualização",
     "provider": "Provedor",
     "providerOpenAiCompatible": "Compatível com OpenAI",
+    "reasoningEffort": "Esforço de raciocínio",
+    "reasoningEffortDefault": "Padrão do provedor",
+    "reasoningEffortHint": "Quanto o modelo pensa antes de responder. Só em modelos de raciocínio (série o, gpt-5); mais esforço significa resposta mais lenta e mais cara.",
     "reload": "Recarregar",
     "roundingDate": "data",
     "roundingExact": "exata · muda a cada minuto",
@@ -878,6 +911,10 @@
     "saveTools": "Salvar ferramentas",
     "sectionsNav": "Seções",
     "selectProvider": "Selecione…",
+    "sendImage": "Envio de imagens",
+    "sendImageHint": "Hosts de onde o agente pode baixar uma imagem quando usa a ferramenta \"Enviar imagem\". Quem escolhe a URL é o agente, então esta lista é o que decide aonde ele consegue ir de fato: deixe vazia e toda tentativa é recusada. Os guardrails de saída leem texto, nunca a imagem em si, então esta lista é o único controle sobre o que uma imagem pode mostrar. Não tem efeito enquanto a ferramenta não for concedida na aba Ferramentas.",
+    "sendImageHosts": "Hosts liberados",
+    "sendImageHostsHint": "Um por linha, ex.: cdn.minhaloja.com.br. Comece com \"*.\" para cobrir um domínio e seus subdomínios (*.minhaloja.com.br). Se colar uma URL inteira, só o host é aproveitado.",
     "split": "Resposta em várias mensagens",
     "splitEnabled": "Dividir respostas em várias mensagens com atraso de digitação",
     "splitHint": "Divide respostas longas em mensagens menores, com uma pausa de digitação entre elas (parece mais humano).",
@@ -1056,15 +1093,21 @@
       "addCalendarById": "Adicionar por ID",
       "anyFolder": "Qualquer pasta (sem escopo)",
       "appointmentLength": "Duração do agendamento",
+      "blockingCalendars": "Agendas de bloqueio",
+      "blockingCalendarsHint": "Agendas que o agente respeita mas nunca agenda nelas: todo evento delas bloqueia a disponibilidade (feriados, fechamentos, folgas). O agente nunca vê os detalhes dos eventos.",
+      "blockingCalendarsLimitWarning": "Mais de {{max}} agendas de bloqueio selecionadas; a verificação de disponibilidade vai recusar até a lista ser reduzida.",
+      "calendarManualAria": "ID de agenda manual {{index}}",
       "calendarPlaceholder": "ID da agenda (ex.: equipe@group.calendar.google.com)",
       "calendarPrimary": "(principal)",
       "calendars": "Agendas permitidas",
       "calendarsError": "Não foi possível listar as agendas. Verifique o escopo de Agenda da credencial e tente novamente.",
       "calendarsFromCredential": "Agendas da conta conectada",
-      "calendarsHint": "As agendas que o agente pode ler e escrever. Deixe vazio para usar a agenda principal da conta conectada.",
+      "calendarsHint": "As agendas que o agente pode ler e escrever. As ferramentas de agenda ficam desabilitadas até pelo menos uma ser escolhida.",
       "calendarsPickCredential": "Escolha uma credencial do Google conectada acima para listar as agendas.",
       "calendarTabs": "Configurações do calendário",
       "createCalendarLink": "Precisa de uma agenda nova? Criar no Google Calendar",
+      "createMeetLink": "Criar uma sala do Google Meet para cada agendamento",
+      "createMeetLinkHint": "O agente compartilha o link do Meet com o cliente. Desligue se esta agenda serve apenas para bloquear horários.",
       "environment": "Ambiente",
       "filterFolders": "Filtrar pastas por nome",
       "folder": "Pasta",
@@ -1144,13 +1187,22 @@
     "saveError": "Não foi possível salvar.",
     "sharedNotice": "Esta é uma integração compartilhada. Alterações afetam todos os agentes que a usam.",
     "subtitle": "Ative integrações prontas que seus agentes podem usar.",
-    "tokenHint": "Copie esta URL para as configurações de webhook do provedor. Ela é exibida apenas uma vez.",
+    "tokenHint": "Copie esta URL para as configurações de webhook do provedor. Você pode consultá-la depois editando esta integração.",
     "tokenTitle": "URL do webhook de entrada",
     "toolsTitle": "O que esta integração faz",
     "type": "Integração",
     "webhook": {
       "explain": "Quando uma cobrança é paga, o Asaas chama este webhook e o agente é acordado exatamente na conversa que gerou a cobrança. Ele então decide se manda uma mensagem ao cliente (podendo usar as ferramentas). Você cola a URL do webhook no painel do Asaas depois de salvar.",
-      "title": "Webhook de pagamento"
+      "rotate": "Gerar nova URL",
+      "rotateConfirm": "Gerar",
+      "rotateError": "Não foi possível gerar.",
+      "rotateMessage": "A URL atual para de funcionar na hora. Você precisa colar a nova no painel do provedor, senão os avisos de pagamento deixam de chegar.",
+      "rotateTitle": "Gerar uma nova URL",
+      "title": "Webhook de pagamento",
+      "url": "URL do webhook",
+      "urlHint": "Cole esta URL no painel do provedor.",
+      "urlMissing": "Esta integração foi criada antes de a URL poder ser exibida de novo, então não temos mais como mostrá-la. Gere uma nova e atualize no painel do provedor.",
+      "urlUnreadable": "A URL guardada não pode mais ser decifrada, o que normalmente significa que a chave de criptografia mudou. Gere uma nova e atualize no painel do provedor."
     }
   },
   "invite": {
@@ -1215,7 +1267,8 @@
       "PENDING": "Pendente",
       "PROCESSING": "Processando...",
       "READY": "{{n}} trechos",
-      "UNINDEXED": "Não indexado"
+      "UNINDEXED": "Não indexado",
+      "UNINDEXED_BLOCKED": "Não indexado: bloqueado"
     },
     "docTitle": "Título",
     "docTitleLabel": "Título",
@@ -1228,6 +1281,11 @@
     "docUpdateError": "Não foi possível atualizar o documento.",
     "dropHint": "Arraste e solte arquivos aqui, ou clique para escolher",
     "editTitle": "Editar base de conhecimento",
+    "embeddingBlock": {
+      "empty": "A credencial de embedding está vazia. Preencha-a e indexe novamente.",
+      "notConfigured": "A credencial de embedding não está configurada neste workspace. Configure em Componentes e indexe novamente.",
+      "pending": "A credencial de embedding existe mas nunca foi preenchida. Preencha em Componentes e indexe novamente."
+    },
     "emptyDesc": "Crie uma e adicione seus FAQs, documentos ou informações de produto.",
     "emptyTitle": "Nenhuma base de conhecimento ainda",
     "fileHint": "PDF, DOCX, TXT, MD, CSV",
@@ -1239,8 +1297,6 @@
     "index": "Indexar",
     "indexAll": "Indexar todos ({{n}})",
     "indexAllError": "Não foi possível iniciar a indexação.",
-    "indexBlockedCredentialPending": "A credencial de embedding ainda não foi preenchida. Preencha o segredo no vault e tente de novo.",
-    "indexBlockedNotConfigured": "Embedding não configurado. Configure o embedding do tenant (provedor/modelo/credencial) antes de indexar.",
     "indexing": "Indexando…",
     "loadError": "Não foi possível carregar esta base.",
     "name": "Nome",
@@ -1491,6 +1547,10 @@
     "send_carousel_message": {
       "desc": "Envia um carrossel de cartões roláveis (imagem + texto + opções) para produtos ou planos.",
       "label": "Enviar carrossel"
+    },
+    "send_image": {
+      "desc": "Entrega uma imagem ao cliente a partir da URL dela, restrita aos hosts que você liberar.",
+      "label": "Enviar imagem"
     },
     "send_list_message": {
       "desc": "Envia um menu rolável de opções agrupadas (mais de 3 opções, ou com descrições).",
@@ -1801,7 +1861,7 @@
       "label": "Gerar link de pagamento"
     },
     "asaas_payment_status": {
-      "desc": "Consulta o status de um link de pagamento Asaas.",
+      "desc": "Consulta o status de uma cobrança (PIX) ou de um link de pagamento Asaas.",
       "label": "Consultar pagamento"
     },
     "calendar_cancel_event": {
@@ -1809,7 +1869,7 @@
       "label": "Cancelar evento"
     },
     "calendar_check_availability": {
-      "desc": "Lista horários livres para agendar num período, respeitando o horário de atendimento e a agenda.",
+      "desc": "Lista horários livres para agendar num período, respeitando o horário de atendimento, a agenda e as agendas de bloqueio (feriados, fechamentos).",
       "label": "Horários disponíveis"
     },
     "calendar_confirm_appointment": {
@@ -1821,7 +1881,7 @@
       "label": "Criar evento"
     },
     "calendar_list_events": {
-      "desc": "Lista os agendamentos do próprio cliente em um intervalo de tempo (cada cliente vê só os seus).",
+      "desc": "Lista os agendamentos do próprio cliente em um intervalo de tempo (cada cliente vê só os seus; feriados e fechamentos nunca aparecem aqui).",
       "label": "Agendamentos do cliente"
     },
     "calendar_update_event": {
@@ -1887,6 +1947,8 @@
     "emptyDesc": "Defina uma ferramenta uma vez e depois conceda-a aos agentes que precisarem.",
     "emptyTitle": "Nenhuma ferramenta HTTP ainda",
     "enumValuePlaceholder": "valor",
+    "expectedStatuses": "Status que significam \"sem resultado\"",
+    "expectedStatusesHint": "Separados por vírgula, por exemplo 404. Use quando esta API responde com status de erro para uma resposta comum: uma consulta que devolve 404 para \"não encontrado\". Essas respostas deixam de contar como falha de integração, então param de gerar alerta. A IA lê a mesma resposta nos dois casos. Deixe vazio e todo não-2xx é tratado como falha.",
     "formatJson": "Formatar",
     "headerKey": "Cabeçalho",
     "headers": "Cabeçalhos",

@@ -5,6 +5,7 @@ import { withEntityLock } from "@/lib/locks";
 import { runScopedOn, type ScopedDb, type TenantContext } from "@/lib/tenancy";
 import { emitOutbound } from "@/modules/webhooks/outbound/service";
 import { isNewIncomingMessage } from "./normalize";
+import { decideConversationWrites, type StatePayload } from "./state-order";
 import type { NormalizedChatwootEvent } from "./types";
 
 // Fire an outbound event from inside the mirror's scoped tx. Best-effort for the DOMAIN: a fan-out
@@ -30,8 +31,9 @@ async function emitMirrorEvent(
 // Mirror Chatwoot conversation/inbox/contact METADATA into our DB (no message body by default).
 // Powers the UI conversation list + read API; the runtime reads it for routing. Contact and
 // Inbox upserts are atomic (ON CONFLICT, safe under concurrency); the Conversation read-modify-
-// write is serialized per conversation by an advisory lock and guarded monotonically so an
-// out-of-order delivery (Chatwoot does not guarantee order) cannot regress status/assignee.
+// write is serialized per conversation by an advisory lock, and what each delivery is allowed to
+// write is decided by `state-order.ts` (Chatwoot does not guarantee order, and a message event
+// carries a frozen conversation snapshot that must not regress status/assignee).
 
 function sysCtx(tenantId: bigint): TenantContext {
   return { tenantId, userId: null, role: "TENANT_ADMIN" };
@@ -80,8 +82,20 @@ export async function mirrorChatwootEvent(
     };
   }
   const convId = n.conversationId;
+  const now = new Date();
   const newLastEventAt =
     n.lastActivityAt != null ? new Date(n.lastActivityAt * 1000) : null;
+  // How this payload is positioned against what we already store. The rules, and the Chatwoot
+  // behaviour they are written against, live in `state-order.ts`.
+  const statePayload: StatePayload = {
+    version: n.conversationUpdatedAt ?? null,
+    activityAt: newLastEventAt,
+    fromConversationEvent: n.message === undefined,
+    reopensConversation: isNewIncomingMessage(n),
+    status: n.status ?? null,
+    assigneeStated: n.assigneeType !== undefined,
+    assigneeType: n.assigneeType ?? null,
+  };
   // The inbound watermark (`lastInboundAt`) advances only on a brand-new incoming customer message
   // (message_created), never on a message_updated — our own STT/vision write-back re-dispatches one
   // and must not push it forward. The caller also suppresses it for a consumed control command (see
@@ -89,11 +103,11 @@ export async function mirrorChatwootEvent(
   // window.
   const inboundAt =
     isNewIncomingMessage(n) && !opts.suppressInboundWatermark
-      ? (newLastEventAt ?? new Date())
+      ? (newLastEventAt ?? now)
       : null;
 
   return runScopedOn(base, sysCtx(tenantId), async (db) => {
-    const contactId = await upsertContact(db, tenantId, n);
+    const contactId = await upsertContact(db, tenantId, n, newLastEventAt);
     const inboxRowId = await upsertInbox(db, tenantId, instanceId, n);
 
     const threadId = `${tenantId}:${instanceId}:${convId}`;
@@ -109,24 +123,32 @@ export async function mirrorChatwootEvent(
         select: {
           id: true,
           lastEventAt: true,
+          chatwootStatusAt: true,
+          chatwootAssigneeAt: true,
           assigneeId: true,
           assigneeType: true,
+          assigneeName: true,
           status: true,
         },
       });
       const prevAssigneeId = existing?.assigneeId ?? null;
-
-      // Monotonic guard: only when both timestamps are known. A null new timestamp applies
-      // best-effort (the next timestamped event reconciles).
-      const stale =
-        newLastEventAt != null &&
-        existing?.lastEventAt != null &&
-        existing.lastEventAt > newLastEventAt;
-      if (stale) {
+      const decision = decideConversationWrites(
+        statePayload,
+        existing
+          ? {
+              activityAt: existing.lastEventAt,
+              statusAt: existing.chatwootStatusAt,
+              assigneeAt: existing.chatwootAssigneeAt,
+              assigneeType: existing.assigneeType,
+            }
+          : null,
+        now,
+      );
+      if (existing && decision.stale) {
         return {
           conversationRowId: existing.id,
           prevAssigneeId,
-          // No transition applied — report status/prevStatus equal so a caller's diff sees "no change".
+          // NOTE: No transition applied — report status/prevStatus equal so a caller's diff sees "no change".
           prevStatus: existing.status,
           applied: false,
           status: existing.status,
@@ -137,8 +159,8 @@ export async function mirrorChatwootEvent(
       }
 
       if (!existing) {
-        const createdStatus = n.status ?? "open";
-        const createdLastEventAt = newLastEventAt ?? new Date();
+        const createdStatus = decision.status ?? "open";
+        const createdLastEventAt = decision.activityAt;
         const created = await db.conversation.create({
           data: {
             tenantId,
@@ -148,12 +170,24 @@ export async function mirrorChatwootEvent(
             inboxId: inboxRowId,
             contactId,
             status: createdStatus,
-            assigneeId: n.assigneeId,
-            assigneeType: n.assigneeType,
-            assigneeName: n.assigneeName,
+            assigneeId: n.assigneeId ?? null,
+            assigneeType: n.assigneeType ?? null,
+            assigneeName: n.assigneeName ?? null,
             threadId,
             lastEventAt: createdLastEventAt,
+            chatwootStatusAt: decision.statusAt,
+            chatwootAssigneeAt: decision.assigneeAt,
             lastInboundAt: inboundAt,
+            ...(n.customAttributes
+              ? {
+                  customAttributes: n.customAttributes as Prisma.InputJsonValue,
+                }
+              : {}),
+            ...(n.kanbanAttributes
+              ? {
+                  kanbanAttributes: n.kanbanAttributes as Prisma.InputJsonValue,
+                }
+              : {}),
           },
           select: { id: true },
         });
@@ -161,52 +195,86 @@ export async function mirrorChatwootEvent(
           conversation_id: String(created.id),
           inbox_id: inboxRowId != null ? String(inboxRowId) : null,
           status: createdStatus,
-          assignee_type: n.assigneeType,
+          assignee_type: n.assigneeType ?? null,
         });
         return {
           conversationRowId: created.id,
           prevAssigneeId,
-          // No prior row → no prior status (never a "transition" for a brand-new conversation).
+          // NOTE: No prior row → no prior status (never a "transition" for a brand-new conversation).
           prevStatus: null,
           applied: true,
           status: createdStatus,
-          assigneeId: n.assigneeId,
-          assigneeType: n.assigneeType,
+          assigneeId: n.assigneeId ?? null,
+          assigneeType: n.assigneeType ?? null,
           lastEventAt: createdLastEventAt,
         };
       }
 
-      const updatedLastEventAt = newLastEventAt ?? new Date();
-      const nextStatus = n.status ?? existing.status;
+      const effectiveLastEventAt = decision.activityAt;
+      const appliedStatus = decision.status;
+      const nextStatus = appliedStatus ?? existing.status;
+      const assigneeKnown = decision.assignee;
+      const nextAssigneeId = assigneeKnown
+        ? (n.assigneeId ?? null)
+        : existing.assigneeId;
+      const nextAssigneeType = assigneeKnown
+        ? (n.assigneeType ?? null)
+        : existing.assigneeType;
       await db.conversation.update({
         where: { id: existing.id },
         data: {
-          ...(n.contactInboxId != null
+          ...(decision.unversioned && n.contactInboxId != null
             ? { contactInboxId: n.contactInboxId }
             : {}),
-          ...(inboxRowId != null ? { inboxId: inboxRowId } : {}),
-          ...(contactId != null ? { contactId } : {}),
-          ...(n.status != null ? { status: n.status } : {}),
-          assigneeId: n.assigneeId,
-          assigneeType: n.assigneeType,
-          assigneeName: n.assigneeName,
-          lastEventAt: updatedLastEventAt,
+          ...(decision.unversioned && inboxRowId != null
+            ? { inboxId: inboxRowId }
+            : {}),
+          ...(decision.unversioned && contactId != null ? { contactId } : {}),
+          ...(appliedStatus != null ? { status: appliedStatus } : {}),
+          ...(assigneeKnown
+            ? {
+                assigneeId: n.assigneeId ?? null,
+                assigneeType: n.assigneeType ?? null,
+                assigneeName: n.assigneeName ?? null,
+              }
+            : {}),
+          lastEventAt: effectiveLastEventAt,
+          ...(decision.statusAt != null
+            ? { chatwootStatusAt: decision.statusAt }
+            : {}),
+          ...(decision.assigneeAt != null
+            ? { chatwootAssigneeAt: decision.assigneeAt }
+            : {}),
           ...(inboundAt != null ? { lastInboundAt: inboundAt } : {}),
+          // NOTE: The bags are ASSIGNED (the payload always ships the whole jsonb), but only when the
+          // event carried one: a payload without them must not wipe the stored snapshot.
+          ...(decision.unversioned && n.customAttributes
+            ? { customAttributes: n.customAttributes as Prisma.InputJsonValue }
+            : {}),
+          ...(decision.unversioned && n.kanbanAttributes
+            ? { kanbanAttributes: n.kanbanAttributes as Prisma.InputJsonValue }
+            : {}),
         },
       });
       const inboxIdStr = inboxRowId != null ? String(inboxRowId) : null;
-      if (n.status != null && n.status !== existing.status) {
+      if (appliedStatus != null && appliedStatus !== existing.status) {
         await emitMirrorEvent(db, tenantId, "conversation.status_changed", {
           conversation_id: String(existing.id),
           inbox_id: inboxIdStr,
           status: nextStatus,
           previous_status: existing.status,
-          assignee_type: n.assigneeType,
+          assignee_type: nextAssigneeType,
         });
       }
-      // Handoff = the assignee transitions to a human (User). Detect the bot→human edge:
-      // prior assignee type was not User and the new one is User.
-      if (existing.assigneeType !== "User" && n.assigneeType === "User") {
+      // NOTE: Handoff = the assignee transitions to a human (User). Detect the bot→human edge:
+      // prior assignee type was not User and the new one is User. A snapshot older than the state
+      // we hold never fires it — its assignee was not applied above. (An undefined trio — degraded
+      // payload — never equals "User" either, so it can neither fire nor mask the edge.)
+      if (
+        assigneeKnown &&
+        existing.assigneeType !== "User" &&
+        n.assigneeType === "User"
+      ) {
         await emitMirrorEvent(db, tenantId, "conversation.handoff", {
           conversation_id: String(existing.id),
           inbox_id: inboxIdStr,
@@ -215,13 +283,14 @@ export async function mirrorChatwootEvent(
       return {
         conversationRowId: existing.id,
         prevAssigneeId,
-        // The status as persisted BEFORE this update — the real transition source value.
+        // NOTE: The status as persisted BEFORE this update — the real transition source value.
         prevStatus: existing.status,
         applied: true,
-        status: n.status ?? existing.status,
-        assigneeId: n.assigneeId,
-        assigneeType: n.assigneeType,
-        lastEventAt: updatedLastEventAt,
+        status: nextStatus,
+        // NOTE: EFFECTIVE values (what is stored after this update), not the payload's silence.
+        assigneeId: nextAssigneeId,
+        assigneeType: nextAssigneeType,
+        lastEventAt: effectiveLastEventAt,
       };
     });
   });
@@ -231,6 +300,7 @@ async function upsertContact(
   db: ScopedDb,
   tenantId: bigint,
   n: NormalizedChatwootEvent,
+  eventAt: Date | null,
 ): Promise<bigint | null> {
   const c = n.contact;
   if (!c || c.id == null) return null;
@@ -256,6 +326,33 @@ async function upsertContact(
     },
     select: { id: true },
   });
+  // NOTE: Chatwoot ships the contact's whole custom_attributes hash on every event, so it is
+  // assigned wholesale — but only when this payload carried it (absent ⇒ keep the stored snapshot),
+  // and only when it is NEWER than what produced the stored one. This upsert runs before the
+  // conversation's stale check (the conversation row needs the contact id), and one contact is
+  // shared by all its conversations, so the conversation guard cannot cover it: the watermark is
+  // per-contact. Single statement ⇒ the compare-and-set is atomic under concurrent deliveries.
+  //
+  // `custom_attributes_at` is a SOURCE position, never a receipt time: stamping an undated payload
+  // with our own clock would make it beat every real Chatwoot timestamp and poison the ordering. An
+  // undated payload therefore only BOOTSTRAPS a contact nothing has positioned yet, and leaves the
+  // watermark null so the first dated event still takes over.
+  if (c.customAttributes) {
+    const bag = JSON.stringify(c.customAttributes);
+    await (eventAt
+      ? db.$executeRaw`
+          UPDATE contacts
+          SET custom_attributes = ${bag}::jsonb, custom_attributes_at = ${eventAt}
+          WHERE id = ${row.id} AND tenant_id = ${tenantId}
+            AND (custom_attributes_at IS NULL OR custom_attributes_at <= ${eventAt})
+        `
+      : db.$executeRaw`
+          UPDATE contacts
+          SET custom_attributes = ${bag}::jsonb
+          WHERE id = ${row.id} AND tenant_id = ${tenantId}
+            AND custom_attributes_at IS NULL
+        `);
+  }
   return row.id;
 }
 

@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@/../generated/prisma/client";
+import { Prisma, type PrismaClient } from "@/../generated/prisma/client";
 import logger from "@/api/lib/logger";
 import basePrisma from "@/api/lib/prisma";
 import config from "@/config";
@@ -6,19 +6,14 @@ import { assertSafeOutboundUrl } from "@/lib/ssrf";
 import { asSuperAdminOn, runScopedOn, type TenantContext } from "@/lib/tenancy";
 import { tryResolveVaultSecret } from "@/modules/vault/service";
 import { nextBackoffMs } from "./service";
-import {
-  DELIVERY_HEADER,
-  SIGNATURE_HEADER,
-  signOutbound,
-  TIMESTAMP_HEADER,
-} from "./signing";
+import { outboundHeaders } from "./signing";
 
 // Outbound webhook delivery worker (claim + deliver side). A single-replica tick claims due
 // PENDING deliveries cross-tenant (asSuperAdmin / FOR UPDATE SKIP LOCKED), then for each:
 // resolves the per-tenant signing secret (RLS-scoped), POSTs the signed payload OUTSIDE any
 // transaction (SSRF-checked, no redirects, timeout), and records the outcome — DELIVERED,
 // back to PENDING with full-jitter backoff, or DEAD after MAX_ATTEMPTS. The delivery id is a
-// stable dedupe key (x-secretaria-delivery) so at-least-once retries are safe for receivers.
+// stable dedupe key (x-fazerai-delivery) so at-least-once retries are safe for receivers.
 //
 // Crash safety: the claim flips status to SENDING; a crash between claim and outcome would
 // strand the row, so each tick first reaps stale SENDING rows back to PENDING. The reentrancy
@@ -40,6 +35,11 @@ export interface OutboundWorkerOptions {
   fetchImpl?: typeof fetch;
   assertSafe?: (url: string) => Promise<URL>;
   now?: () => number;
+  // NOTE: test-only isolation, mirroring the alert worker's. Scopes the claim + reap to one tenant
+  // so two suites sharing the test database cannot steal each other's deliveries (the claim is
+  // cross-tenant, and SKIP LOCKED hands a row to whoever gets there first). Unset in production =
+  // global claim, which is correct under the single-leader invariant.
+  tenantId?: bigint;
 }
 
 export interface OutboundBatchSummary {
@@ -100,11 +100,16 @@ async function reapStaleSending(
   base: PrismaClient,
   staleMs: number,
   now: () => number,
+  tenantId?: bigint,
 ): Promise<number> {
   const cutoff = new Date(now() - staleMs);
   const { count } = await asSuperAdminOn(base, (db) =>
     db.outboundWebhookDelivery.updateMany({
-      where: { status: "SENDING", updatedAt: { lt: cutoff } },
+      where: {
+        status: "SENDING",
+        updatedAt: { lt: cutoff },
+        ...(tenantId != null ? { tenantId } : {}),
+      },
       data: { status: "PENDING" },
     }),
   );
@@ -117,7 +122,12 @@ async function reapStaleSending(
 async function claimDueDeliveries(
   base: PrismaClient,
   limit: number,
+  tenantId?: bigint,
 ): Promise<ClaimedDelivery[]> {
+  const tenantClause =
+    tenantId != null
+      ? Prisma.sql`AND d2.tenant_id = ${tenantId}`
+      : Prisma.empty;
   return asSuperAdminOn(
     base,
     (db) =>
@@ -131,6 +141,7 @@ async function claimDueDeliveries(
         WHERE d2.status = 'PENDING'
           AND (d2.next_attempt_at IS NULL OR d2.next_attempt_at <= now())
           AND s2.enabled = true
+          ${tenantClause}
         ORDER BY d2.next_attempt_at NULLS FIRST, d2.id
         FOR UPDATE OF d2 SKIP LOCKED
         LIMIT ${limit}
@@ -250,16 +261,15 @@ async function deliverClaimed(
   const ts = Math.floor(now() / 1000);
   // The stored payload IS the versioned envelope (built at emit time by buildOutboundEnvelope):
   // { version, instance_id, event, occurred_at, tenant_id, data }. POST it verbatim — the
-  // delivery id (retry dedupe key) travels in the x-secretaria-delivery header, not the body.
+  // delivery id (retry dedupe key) travels in the x-fazerai-delivery header, not the body.
   const rawBody = JSON.stringify(d.payload ?? {});
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-    [DELIVERY_HEADER]: String(d.id),
-  };
-  if (secret) {
-    headers[SIGNATURE_HEADER] = signOutbound(secret, ts, rawBody);
-    headers[TIMESTAMP_HEADER] = String(ts);
-  }
+  const headers = outboundHeaders({
+    contentType: "application/json",
+    deliveryId: String(d.id),
+    timestampSeconds: ts,
+    rawBody,
+    secret,
+  });
 
   let status: number;
   try {
@@ -291,10 +301,12 @@ export async function processOutboundBatch(
     base,
     opts.staleMs ?? STALE_SENDING_MS,
     now,
+    opts.tenantId,
   );
   const claimed = await claimDueDeliveries(
     base,
     opts.claimLimit ?? CLAIM_LIMIT,
+    opts.tenantId,
   );
   const outcomes = await mapWithConcurrency(
     claimed,

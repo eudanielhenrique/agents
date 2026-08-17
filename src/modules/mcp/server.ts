@@ -792,7 +792,7 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
       "inbox_list",
       {
         description:
-          "List the tenant's Chatwoot inboxes (id, chatwootInstanceId, chatwootInboxId, name, channelType, agentId). agentId is the bound agent (null = unbound).",
+          "List the tenant's Chatwoot inboxes (id, chatwootInstanceId, chatwootInboxId, name, channelType, agentId). agentId is the bound agent (null = unbound). This lists the LOCAL MIRROR, which can lag behind Chatwoot; if an inbox you expect is missing and you have mcp:write, call instance_sync_inboxes with instance_id=chatwootInstanceId and dry_run:false, then list again.",
         inputSchema: {},
       },
       async (_args, eff) => writeContent(await inboxList(eff)),
@@ -1162,7 +1162,7 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
       "agent_settings_set",
       {
         description:
-          "Patch an agent's BEHAVIOR config. Each block (debounce, stt, tts, split, serviceWindow, grounding, limits) is a PARTIAL patch MERGED into the existing settings (untouched keys preserved) and re-validated/clamped by the runtime readers. Previews a normalized diff and applies NOTHING unless dry_run is false. credentialRef accepts a vault entry NAME or a stable vault:<id> ref (use vault:<id> when multiple entries share the same name). debounce: {enabled,windowSeconds,maxMessagesPerBurst,maxWindowSeconds}. stt: {enabled,provider,model,language,credentialRef,baseURL}. tts: {mode(never|mirror|preference),provider,model,voice,credentialRef,normalize(bool: LLM rewrite of the reply for natural speech before TTS, any language)}. vision: {enabled,provider(openai|gemini|anthropic),model,credentialRef,baseURL,extractionPrompt} — image/document reading at message arrival. split: {enabled,maxChars,typingWpm,minDelayMs,maxDelayMs,maxChunks}. serviceWindow: {enabled,windowHours,templateName,templateLanguage,templateCategory,templateParams,templateContent}. grounding: {maxDistance}. followUp: {enabled,pauseWhileAppointment,steps:[{delayValue,delayUnit(minutes|hours|days),instructions,assignLabels?,resolve?(last step only)}]}. handoff: {mode(route|pinned|agent_choice),targetAgentId?,targetTeamId?,targetInstanceId?,instructions?}. limits: {maxToolCalls(1-50, default 10)}. channelRedirect (WhatsApp→web-chat funnel): {enabled,entryInboxId,widgetInboxId,redirectMessage(with {link}),resendDelayValue,resendDelayUnit(minutes|hours|days),maxResends,openWidget,cloneWaMessage,chatFollowupEnabled,chatFollowupDelayValue,chatFollowupDelayUnit,chatFollowupInstructions,waFollowupEnabled,waFollowupDelayValue,waFollowupDelayUnit,waFollowupMessage(fixed text with {link}, re-sends the redirect link on WhatsApp — NOT AI),closingEnabled,closingDelayValue,closingDelayUnit,closingMessage(fixed goodbye, posted on BOTH chat + WhatsApp — NOT AI)} — the follow-up chain is a timed ladder (chat→whatsapp→closing); widgetInboxId is provisioned via the console (the web widget inbox), not set by hand. (Appointment reminders live on the Calendar integration's config, not here — see integration_update.) guardrails (input/output moderation, off by default): {enabled,provider,model,credentialRef,baseURL,competitors:[names for the competitorMentions check],customPolicy(free text appended to every analysis prompt),input:{enabled,checks:{toxicity,unsafeContent,competitorMentions,promptAdherence},action(template|generated|silent),templateMessage,generationPrompt},output:{...same shape as input}} — provider/model/credentialRef select the DEDICATED guardrails-agent model, separate from the main agent's; credentialRef follows the same vault entry NAME / vault:<id> rule as stt/tts/vision above.",
+          "Patch an agent's BEHAVIOR config. Each block (debounce, stt, tts, split, serviceWindow, grounding, limits) is a PARTIAL patch MERGED into the existing settings (untouched keys preserved) and re-validated/clamped by the runtime readers. Previews a normalized diff and applies NOTHING unless dry_run is false. credentialRef accepts a vault entry NAME or a stable vault:<id> ref (use vault:<id> when multiple entries share the same name). debounce: {enabled,windowSeconds,maxMessagesPerBurst,maxWindowSeconds}. stt: {enabled,provider,model,language,credentialRef,baseURL}. tts: {mode(never|mirror|preference),provider,model,voice,credentialRef,normalize(bool: LLM rewrite of the reply for natural speech before TTS, any language)}. vision: {enabled,provider(openai|gemini|anthropic),model,credentialRef,baseURL,extractionPrompt} — image/document reading at message arrival. split: {enabled,maxChars,typingWpm,minDelayMs,maxDelayMs,maxChunks}. serviceWindow: {enabled,windowHours,templateName,templateLanguage,templateCategory,templateParams,templateContent}. grounding: {maxDistance}. followUp: {enabled,pauseWhileAppointment,steps:[{delayValue,delayUnit(minutes|hours|days),instructions,assignLabels?,resolve?(last step only)}]}. handoff: {mode(route|pinned|agent_choice),targetAgentId?,targetTeamId?,targetInstanceId?,instructions?}. limits: {maxToolCalls(1-50, default 10)}. guardrails (input/output moderation, off by default): {enabled,provider,model,credentialRef,baseURL,competitors:[names for the competitorMentions check],customPolicy(free text appended to every analysis prompt),input:{enabled,checks:{toxicity,unsafeContent,competitorMentions,promptAdherence},action(template|generated|silent),templateMessage,generationPrompt},output:{...same shape as input}} — provider/model/credentialRef select the DEDICATED guardrails-agent model, separate from the main agent's; credentialRef follows the same vault entry NAME / vault:<id> rule as stt/tts/vision above. attributeContext (which Chatwoot custom attributes are injected into the agent's prompt as current values): {conversation:[keys],contact:[keys],task:[keys]} — attribute KEYS per scope, max 20 each; empty arrays disable the block. sendImage (hosts the send_image tool may fetch an image from — the model picks the URL, so this list is the operator's fence; empty refuses every call): {allowedHosts:[hostnames, one per entry, \"*.\" prefix covers a domain and its subdomains]}. channelRedirect (WhatsApp→web-chat funnel): {enabled,entryInboxId,widgetInboxId,redirectMessage(with {link}),resendDelayValue,resendDelayUnit(minutes|hours|days),maxResends,openWidget,cloneWaMessage,chatFollowupEnabled,chatFollowupDelayValue,chatFollowupDelayUnit,chatFollowupInstructions,waFollowupEnabled,waFollowupDelayValue,waFollowupDelayUnit,waFollowupMessage(fixed text with {link}, re-sends the redirect link on WhatsApp — NOT AI),closingEnabled,closingDelayValue,closingDelayUnit,closingMessage(fixed goodbye, posted on BOTH chat + WhatsApp — NOT AI)} — the follow-up chain is a timed ladder (chat→whatsapp→closing); widgetInboxId is provisioned via the console (the web widget inbox), not set by hand. observability (what this agent's tool calls leave on the Logs page): {logToolValues(bool, default false)} — false records the SHAPE of each tool argument and result ({cpf:\"string(11)\"}), which is what keeps execution_logs free of message text and PII; true records the values as sent, kept for the whole log retention window and included in every export. (Appointment reminders live on the Calendar integration's config, not here — see integration_update.)",
         inputSchema: {
           agent_id: z.string(),
           debounce: z.record(z.string(), z.unknown()).optional(),
@@ -1177,6 +1177,9 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
           limits: z.record(z.string(), z.unknown()).optional(),
           channelRedirect: z.record(z.string(), z.unknown()).optional(),
           guardrails: z.record(z.string(), z.unknown()).optional(),
+          attributeContext: z.record(z.string(), z.unknown()).optional(),
+          sendImage: z.record(z.string(), z.unknown()).optional(),
+          observability: z.record(z.string(), z.unknown()).optional(),
           dry_run: z.boolean().optional(),
         },
       },
@@ -1195,6 +1198,9 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
           limits?: Record<string, unknown>;
           channelRedirect?: Record<string, unknown>;
           guardrails?: Record<string, unknown>;
+          attributeContext?: Record<string, unknown>;
+          sendImage?: Record<string, unknown>;
+          observability?: Record<string, unknown>;
           dry_run?: boolean;
         },
         eff,
@@ -1414,7 +1420,7 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
       "tool_create",
       {
         description:
-          "Create an HTTP tool definition. Previews the normalized input and creates NOTHING unless dry_run is false. credential_ref accepts a vault entry NAME (resolved server-side; never a raw secret). allowed_hosts is the SSRF allowlist.",
+          'Create an HTTP tool definition. Previews the normalized input and creates NOTHING unless dry_run is false. input_schema is a compact field map — {"field": {"type": "string"|"integer"|"number"|"boolean"|"enum"|"array"|"object", "required"?: true, "description"?: "...", "enumValues"?: [...], "itemType"?: "..."}} — standard JSON Schema ({"properties": ..., "required": [...]}) is also accepted and converted to that shape. Reference a field as {{field}} inside url_template, query values, headers and the body; {{secret}} injects the credential and context vars like {{conversation_id}}/{{contact_name}} also resolve. Single-brace {field} is normalized to {{field}} when it matches a declared field or context var; the dry-run preview reports conversions and unrecognized placeholders as warnings. credential_ref accepts a vault entry NAME (resolved server-side; never a raw secret). allowed_hosts is the SSRF allowlist.',
         inputSchema: {
           name: z.string(),
           label: z.string().optional(),
@@ -1430,6 +1436,12 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
           credential_ref: z.string().nullable().optional(),
           enabled: z.boolean().optional(),
           risk_tier: z.enum(["low", "medium", "high"]).optional(),
+          expected_statuses: z
+            .array(z.number().int())
+            .optional()
+            .describe(
+              "HTTP statuses this tool treats as ordinary results instead of integration failures (e.g. [404] where 'not found' is data). The model receives the same 'HTTP <status>' text either way; only the log level and the alert dispatch change. Empty keeps every non-2xx a failure.",
+            ),
           ack_enabled: z.boolean().optional(),
           ack_message: z.string().nullable().optional(),
           dry_run: z.boolean().optional(),
@@ -1451,6 +1463,7 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
           credential_ref?: string | null;
           enabled?: boolean;
           risk_tier?: "low" | "medium" | "high";
+          expected_statuses?: number[];
           ack_enabled?: boolean;
           ack_message?: string | null;
           dry_run?: boolean;
@@ -1465,7 +1478,7 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
       "tool_update",
       {
         description:
-          "Update an HTTP tool definition. Previews a diff and applies NOTHING unless dry_run is false. credential_ref accepts a vault entry NAME (null clears it). Field names are snake_case ONLY (credential_ref, allowed_hosts, url_template, …) — a camelCase key is silently stripped before this tool ever sees it (MCP schema validation, not a bug you can catch from the diff).",
+          "Update an HTTP tool definition. Previews a diff and applies NOTHING unless dry_run is false. Same authoring contract as tool_create: input_schema is the compact field map (standard JSON Schema is accepted and converted), fields are referenced as {{field}} in url_template/query/headers/body, and single-brace {field} is normalized when it matches a declared field or context var — the dry-run diff shows the canonical form plus warnings. credential_ref accepts a vault entry NAME (null clears it). Field names are snake_case ONLY (credential_ref, allowed_hosts, url_template, …) — a camelCase key is silently stripped before this tool ever sees it (MCP schema validation, not a bug you can catch from the diff).",
         inputSchema: {
           tool_id: z.string(),
           name: z.string().optional(),
@@ -1482,6 +1495,12 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
           credential_ref: z.string().nullable().optional(),
           enabled: z.boolean().optional(),
           risk_tier: z.enum(["low", "medium", "high"]).optional(),
+          expected_statuses: z
+            .array(z.number().int())
+            .optional()
+            .describe(
+              "HTTP statuses this tool treats as ordinary results instead of integration failures (e.g. [404] where 'not found' is data). The model receives the same 'HTTP <status>' text either way; only the log level and the alert dispatch change. Empty keeps every non-2xx a failure.",
+            ),
           ack_enabled: z.boolean().optional(),
           ack_message: z.string().nullable().optional(),
           dry_run: z.boolean().optional(),
@@ -1504,6 +1523,7 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
           credential_ref?: string | null;
           enabled?: boolean;
           risk_tier?: "low" | "medium" | "high";
+          expected_statuses?: number[];
           ack_enabled?: boolean;
           ack_message?: string | null;
           dry_run?: boolean;
@@ -1903,7 +1923,7 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
       "integration_update",
       {
         description:
-          'Update an integration instance (name, enabled, config, credentials, inbound auth). credential_ref/inbound_secret_ref are vault entry NAMES (null clears). Previews a diff and applies NOTHING unless dry_run is false. Field names are snake_case ONLY — a camelCase key is silently stripped before this tool ever sees it. The `config` shape depends on catalogType. GOOGLE_CALENDAR: {calendarIds(allowlist of calendar ids the agent may operate on; empty ⇒ ["primary"]), calendarLabels(map of id→friendly name), timeZone(IANA, e.g. America/Sao_Paulo), slotDurationMinutes, slotGranularityMinutes, appointmentReminders:{enabled,offsetsHours(array of hours-before-start, e.g. [24,1]),askConfirmationOnLast}}. GOOGLE_DRIVE: {folderId, folderName}.',
+          "Update an integration instance (name, enabled, config, credentials, inbound auth). credential_ref/inbound_secret_ref are vault entry NAMES (null clears). Previews a diff and applies NOTHING unless dry_run is false. Field names are snake_case ONLY — a camelCase key is silently stripped before this tool ever sees it. The `config` shape depends on catalogType. GOOGLE_CALENDAR: {calendarIds(allowlist of calendar ids the agent may operate on; empty ⇒ the tools refuse until one is picked), blockingCalendarIds(calendars only RESPECTED by availability, never operated on, e.g. holidays/closures; EVERY event on them blocks slots; max 10, availability refuses beyond that), calendarLabels(map of id→friendly name), timeZone(IANA, e.g. America/Sao_Paulo), businessHoursId(the BusinessHours profile bounding bookable slots; empty ⇒ no time-of-day limit), slotDurationMinutes, slotGranularityMinutes, createMeetLink(default true: calendar_create_event asks Google for a Meet room and returns its meetLink; set false when the calendar is a pure busy-block), appointmentReminders:{enabled,offsetsHours(array of hours-before-start, e.g. [24,1]),askConfirmationOnLast}}. GOOGLE_DRIVE: {folderId, folderName}.",
         inputSchema: {
           integration_id: z.string(),
           name: z.string().optional(),
@@ -2536,13 +2556,16 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
       "branding_set",
       {
         description:
-          "Set the GLOBAL app identity (SUPER_ADMIN token only). Previews a diff and applies NOTHING unless dry_run is false. brand_name is the white-label display name (title + auth footer; null = default). color_mode SIMPLE uses brand_color (a #rrggbb hex); ADVANCED uses the tokens_light/tokens_dark maps. Logo and favicon are uploaded via branding_asset_set (or cropped in the UI at /admin/branding).",
+          "Set the GLOBAL app identity (SUPER_ADMIN token only). Previews a diff and applies NOTHING unless dry_run is false. brand_name is the white-label display name (title + auth footer; null = default). color_mode SIMPLE uses brand_color (a #rrggbb hex); ADVANCED uses the tokens_light/tokens_dark maps. site_url (absolute http(s) URL) and support_email replace the sidebar-footer defaults (null/empty = back to the default); hide_github_link is a boolean — true removes the footer GitHub entry, false restores it. Logo and favicon are uploaded via branding_asset_set (or cropped in the UI at /admin/branding).",
         inputSchema: {
           brand_name: z.string().nullable().optional(),
           color_mode: z.enum(["SIMPLE", "ADVANCED"]).optional(),
           brand_color: z.string().nullable().optional(),
           tokens_light: z.record(z.string(), z.unknown()).optional(),
           tokens_dark: z.record(z.string(), z.unknown()).optional(),
+          site_url: z.string().nullable().optional(),
+          support_email: z.string().nullable().optional(),
+          hide_github_link: z.boolean().optional(),
           dry_run: z.boolean().optional(),
         },
       },
@@ -2552,6 +2575,9 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
         brand_color?: string | null;
         tokens_light?: Record<string, unknown>;
         tokens_dark?: Record<string, unknown>;
+        site_url?: string | null;
+        support_email?: string | null;
+        hide_github_link?: boolean;
         dry_run?: boolean;
       }) => writeContent(await brandingSet(principal, args)),
     );

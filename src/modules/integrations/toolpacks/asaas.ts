@@ -1,8 +1,9 @@
 import { randomBytes } from "node:crypto";
-import { type StructuredToolInterface, tool } from "@langchain/core/tools";
+import type { StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 import type { Prisma } from "@/../generated/prisma/client";
 import logger from "@/api/lib/logger";
+import { failableTool, toolFailure } from "@/graph/tools/failure";
 import { assertSafeOutboundUrl } from "@/lib/ssrf";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
 import {
@@ -137,8 +138,22 @@ const PIX_CHARGE_SCHEMA = z.object({
     .describe("Due date as YYYY-MM-DD (optional; defaults to today)"),
 });
 
+// NOTE: field order is the arg order the UI projection renders (argsFromZod iterates the shape).
+// Exactly one id is required, enforced in code (not .refine) so the model gets a short
+// instructive message instead of a zod validation dump.
 const PAYMENT_STATUS_SCHEMA = z.object({
-  paymentLinkId: z.string().min(1).describe("The Asaas payment link id"),
+  paymentId: z
+    .string()
+    .optional()
+    .describe(
+      "Asaas payment id (starts with pay_...), returned by asaas_create_pix_charge. Use for PIX/direct charges.",
+    ),
+  paymentLinkId: z
+    .string()
+    .optional()
+    .describe(
+      "Asaas payment link id, returned by asaas_payment_link_create. NOT the slug from the invoice/payment URL.",
+    ),
 });
 
 const ASAAS_TOOL_SPECS: ToolSpec[] = [
@@ -159,13 +174,15 @@ function buildCreateLinkTool(
   const base = ASAAS_ORIGINS[env];
   const overrides = (sel.config.paymentLink ?? {}) as Record<string, unknown>;
 
-  return tool(
+  return failableTool(
     async (input: { value: number; description?: string; name?: string }) => {
       const token = sel.credentialRef
         ? await ctx.resolveCredential(sel.credentialRef)
         : null;
       if (!token)
-        return "Asaas credential is not configured for this integration.";
+        return toolFailure(
+          "Asaas credential is not configured for this integration.",
+        );
 
       // Opaque correlation token: sent as externalReference, stored as the ref's externalId, and
       // read back from the payment webhook by the inbound mapper. Never the internal thread id
@@ -194,21 +211,27 @@ function buildCreateLinkTool(
         );
       } catch (err) {
         logger.warn({ err, env }, "asaas: payment link request failed");
-        return "Failed to reach the payment provider. Try again shortly.";
+        return toolFailure(
+          "Failed to reach the payment provider. Try again shortly.",
+        );
       }
       if (res.status < 200 || res.status >= 300) {
         logger.warn(
           "asaas: payment link create returned HTTP %s",
           String(res.status),
         );
-        return `The payment provider rejected the request (HTTP ${res.status}).`;
+        return toolFailure(
+          `The payment provider rejected the request (HTTP ${res.status}).`,
+        );
       }
       const data = (res.json ?? {}) as Record<string, unknown>;
       const linkId = typeof data.id === "string" ? data.id : null;
       const url = typeof data.url === "string" ? data.url : null;
       if (!linkId || !url) {
         logger.warn("asaas: payment link response missing id/url");
-        return "The payment provider returned an unexpected response.";
+        return toolFailure(
+          "The payment provider returned an unexpected response.",
+        );
       }
 
       // Correlation ref (short scoped write, no network — the fetch already happened above).
@@ -235,6 +258,12 @@ function buildCreateLinkTool(
           { err, linkId },
           "asaas: failed to persist correlation ref (orphan link)",
         );
+        ctx.onSideEffectError?.({
+          tool: "asaas_payment_link_create",
+          phase: "persist_ref",
+          detail: { linkId },
+          err,
+        });
       }
       return `Payment link created. Send this URL to the customer: ${url}\n(paymentLinkId: ${linkId})`;
     },
@@ -260,7 +289,7 @@ function buildCreatePixChargeTool(
   const base = ASAAS_ORIGINS[env];
   const overrides = (sel.config.payment ?? {}) as Record<string, unknown>;
 
-  return tool(
+  return failableTool(
     async (input: {
       value: number;
       customerName: string;
@@ -273,7 +302,9 @@ function buildCreatePixChargeTool(
         ? await ctx.resolveCredential(sel.credentialRef)
         : null;
       if (!token)
-        return "Asaas credential is not configured for this integration.";
+        return toolFailure(
+          "Asaas credential is not configured for this integration.",
+        );
 
       const cpfCnpj = input.cpfCnpj.replace(/\D/g, "");
       if (cpfCnpj.length !== 11 && cpfCnpj.length !== 14)
@@ -288,14 +319,43 @@ function buildCreatePixChargeTool(
           { method: "GET", token },
           ctx,
         );
-        if (found.status >= 200 && found.status < 300) {
-          const data = (found.json ?? {}) as { data?: Array<{ id?: unknown }> };
-          const first = data.data?.[0]?.id;
-          if (typeof first === "string") customerId = first;
+        // NOTE: A rejected lookup must fail the call, not fall through with an empty customerId —
+        // falling through would POST /customers and create a DUPLICATE on a transient provider error.
+        if (found.status < 200 || found.status >= 300) {
+          logger.warn(
+            "asaas: customer lookup returned HTTP %s",
+            String(found.status),
+          );
+          return toolFailure(
+            `The payment provider rejected the customer lookup (HTTP ${found.status}).`,
+          );
         }
+        // NOTE: A malformed 2xx body must also fail the call (asaasFetch yields json: null on an
+        // unparseable body) — only a valid data array may reach the create branch, and a non-empty
+        // one must carry a string id, otherwise a parse glitch would duplicate the customer.
+        const json = found.json as { data?: unknown } | null;
+        if (!json || typeof json !== "object" || !Array.isArray(json.data)) {
+          logger.warn("asaas: customer lookup returned an invalid response");
+          return toolFailure(
+            "The payment provider returned an unexpected response.",
+          );
+        }
+        const first = (json.data as Array<{ id?: unknown }>)[0]?.id;
+        // NOTE: A blank ("" / whitespace) id must count as missing — it would leave customerId
+        // falsy and reach the create branch anyway.
+        const firstId = typeof first === "string" ? first.trim() : "";
+        if (json.data.length > 0 && !firstId) {
+          logger.warn("asaas: customer lookup response missing customer id");
+          return toolFailure(
+            "The payment provider returned an unexpected response.",
+          );
+        }
+        if (firstId) customerId = firstId;
       } catch (err) {
         logger.warn({ err, env }, "asaas: customer lookup failed");
-        return "Failed to reach the payment provider. Try again shortly.";
+        return toolFailure(
+          "Failed to reach the payment provider. Try again shortly.",
+        );
       }
 
       if (!customerId) {
@@ -319,21 +379,27 @@ function buildCreatePixChargeTool(
           );
         } catch (err) {
           logger.warn({ err, env }, "asaas: customer create failed");
-          return "Failed to reach the payment provider. Try again shortly.";
+          return toolFailure(
+            "Failed to reach the payment provider. Try again shortly.",
+          );
         }
         if (created.status < 200 || created.status >= 300) {
           logger.warn(
             "asaas: customer create returned HTTP %s",
             String(created.status),
           );
-          return `The payment provider rejected the customer (HTTP ${created.status}).`;
+          return toolFailure(
+            `The payment provider rejected the customer (HTTP ${created.status}).`,
+          );
         }
         const cd = (created.json ?? {}) as Record<string, unknown>;
         if (typeof cd.id === "string") customerId = cd.id;
       }
       if (!customerId) {
         logger.warn("asaas: could not resolve a customer id");
-        return "The payment provider returned an unexpected response.";
+        return toolFailure(
+          "The payment provider returned an unexpected response.",
+        );
       }
 
       // 2) Open the PIX charge. correlationId is opaque (never the internal thread id).
@@ -359,14 +425,18 @@ function buildCreatePixChargeTool(
         );
       } catch (err) {
         logger.warn({ err, env }, "asaas: pix charge request failed");
-        return "Failed to reach the payment provider. Try again shortly.";
+        return toolFailure(
+          "Failed to reach the payment provider. Try again shortly.",
+        );
       }
       if (charge.status < 200 || charge.status >= 300) {
         logger.warn(
           "asaas: pix charge create returned HTTP %s",
           String(charge.status),
         );
-        return `The payment provider rejected the request (HTTP ${charge.status}).`;
+        return toolFailure(
+          `The payment provider rejected the request (HTTP ${charge.status}).`,
+        );
       }
       const cdata = (charge.json ?? {}) as Record<string, unknown>;
       const paymentId = typeof cdata.id === "string" ? cdata.id : null;
@@ -374,7 +444,9 @@ function buildCreatePixChargeTool(
         typeof cdata.invoiceUrl === "string" ? cdata.invoiceUrl : null;
       if (!paymentId) {
         logger.warn("asaas: pix charge response missing id");
-        return "The payment provider returned an unexpected response.";
+        return toolFailure(
+          "The payment provider returned an unexpected response.",
+        );
       }
 
       // Persist the correlation ref (the charge exists; this is what ties a future webhook back to
@@ -397,6 +469,12 @@ function buildCreatePixChargeTool(
           { err, paymentId },
           "asaas: failed to persist correlation ref (orphan charge)",
         );
+        ctx.onSideEffectError?.({
+          tool: "asaas_create_pix_charge",
+          phase: "persist_ref",
+          detail: { paymentId },
+          err,
+        });
       }
 
       // 3) Fetch the PIX copy-and-paste code. Best-effort: a missing PIX key on the account still
@@ -412,9 +490,30 @@ function buildCreatePixChargeTool(
         if (qr.status >= 200 && qr.status < 300) {
           const qd = (qr.json ?? {}) as Record<string, unknown>;
           if (typeof qd.payload === "string") payload = qd.payload;
+        } else {
+          // NOTE: A non-2xx never threw, so this used to vanish silently — the charge exists and
+          // the tool returns success either way, but the customer gets no copy-and-paste code.
+          // (A 2xx without a payload is a legitimate state — e.g. no PIX key, invoiceUrl still
+          // payable — and stays quiet.)
+          logger.warn(
+            { status: qr.status, env },
+            "asaas: pix qr fetch returned a non-2xx response",
+          );
+          ctx.onSideEffectError?.({
+            tool: "asaas_create_pix_charge",
+            phase: "pix_qr",
+            detail: { paymentId },
+            err: `HTTP ${qr.status}`,
+          });
         }
       } catch (err) {
         logger.warn({ err, env }, "asaas: pix qr fetch failed");
+        ctx.onSideEffectError?.({
+          tool: "asaas_create_pix_charge",
+          phase: "pix_qr",
+          detail: { paymentId },
+          err,
+        });
       }
 
       const lines = ["PIX charge created."];
@@ -424,12 +523,13 @@ function buildCreatePixChargeTool(
         lines.push(
           "The charge exists but no payment code was returned; check the Asaas dashboard.",
         );
+      lines.push(`(paymentId: ${paymentId})`);
       return lines.join("\n");
     },
     {
       name: "asaas_create_pix_charge",
       description:
-        "Create a PIX charge in Asaas for a customer and return the copy-and-paste PIX code plus the payment page to send them. Use when the customer wants to pay by PIX.",
+        "Create a PIX charge in Asaas for a customer and return the copy-and-paste PIX code plus the payment page to send them. Use when the customer wants to pay by PIX. Returns the paymentId — use it with asaas_payment_status to check whether it was paid.",
       schema: PIX_CHARGE_SCHEMA,
     },
   );
@@ -442,32 +542,67 @@ function buildStatusTool(
   const env = resolveEnv(sel.config);
   const base = ASAAS_ORIGINS[env];
 
-  return tool(
-    async (input: { paymentLinkId: string }) => {
+  return failableTool(
+    async (input: { paymentId?: string; paymentLinkId?: string }) => {
       const token = sel.credentialRef
         ? await ctx.resolveCredential(sel.credentialRef)
         : null;
       if (!token)
-        return "Asaas credential is not configured for this integration.";
-      // Path-interpolated id is URL-encoded; the origin stays the fixed constant above.
-      const id = encodeURIComponent(input.paymentLinkId);
+        return toolFailure(
+          "Asaas credential is not configured for this integration.",
+        );
+      let paymentId = input.paymentId?.trim() || undefined;
+      let linkId = input.paymentLinkId?.trim() || undefined;
+      // Defensive: a pay_... id in the link field is a payment id (models mix them up).
+      if (!paymentId && linkId?.startsWith("pay_")) {
+        paymentId = linkId;
+        linkId = undefined;
+      }
+      const guidance =
+        "Provide paymentId (pay_..., returned by asaas_create_pix_charge) or paymentLinkId (returned by asaas_payment_link_create). Do NOT use the invoice/payment page URL or its slug.";
+      // Reject pasted URLs outright — Asaas ids never contain slashes or colons; letting an
+      // invoice URL through would surface as a confusing 404 from the provider.
+      const looksLikeUrl = (v: string) => /[/:]/.test(v);
+      if (
+        (paymentId && looksLikeUrl(paymentId)) ||
+        (linkId && looksLikeUrl(linkId))
+      )
+        return guidance;
+      if (!paymentId && !linkId) return guidance;
+      // Path-interpolated ids are URL-encoded; the origin stays the fixed constant above.
+      // When both arrive, the payment wins: its status is the terminal fact (a link stays
+      // `active` even after it was paid).
+      const path = paymentId
+        ? `/payments/${encodeURIComponent(paymentId)}`
+        : `/paymentLinks/${encodeURIComponent(linkId as string)}`;
       let res: AsaasResponse;
       try {
-        res = await asaasFetch(
-          base,
-          `/paymentLinks/${id}`,
-          { method: "GET", token },
-          ctx,
-        );
+        res = await asaasFetch(base, path, { method: "GET", token }, ctx);
       } catch (err) {
         logger.warn({ err, env }, "asaas: payment status request failed");
-        return "Failed to reach the payment provider.";
+        return toolFailure("Failed to reach the payment provider.");
       }
       if (res.status < 200 || res.status >= 300) {
-        return `The payment provider returned HTTP ${res.status}.`;
+        // An invoice-URL SLUG is shape-indistinguishable from a real link id, so it can only be
+        // caught here: turn the provider's 404 into recoverable guidance instead of a dead end.
+        if (res.status === 404)
+          return "The payment provider returned HTTP 404 (id not found). If this value was extracted from an invoice/payment URL, that slug is not a valid id — use the paymentId returned by asaas_create_pix_charge or the paymentLinkId returned by asaas_payment_link_create.";
+        return toolFailure(`The payment provider returned HTTP ${res.status}.`);
       }
       const d = (res.json ?? {}) as Record<string, unknown>;
-      // Bounded projection (no secrets; status-relevant fields only).
+      // Bounded projections (no secrets; status-relevant fields only). The payment path skips
+      // netValue (merchant-facing fee math), invoiceUrl (possibly stale page) and
+      // externalReference (internal correlation token).
+      if (paymentId) {
+        return JSON.stringify({
+          id: d.id,
+          status: d.status,
+          value: d.value,
+          billingType: d.billingType,
+          dueDate: d.dueDate,
+          paymentDate: d.paymentDate,
+        });
+      }
       return JSON.stringify({
         id: d.id,
         active: d.active,
@@ -479,7 +614,7 @@ function buildStatusTool(
     {
       name: "asaas_payment_status",
       description:
-        "Check the status of an Asaas payment link by its id (the paymentLinkId returned at creation).",
+        "Check the status of an Asaas payment. Pass paymentId (pay_..., returned by asaas_create_pix_charge) OR paymentLinkId (returned by asaas_payment_link_create); never the invoice URL or its slug. Payment status is PENDING/RECEIVED/CONFIRMED/OVERDUE/REFUNDED.",
       schema: PAYMENT_STATUS_SCHEMA,
     },
   );

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@/../generated/prisma/client";
+import config from "@/config";
 import type { TenantContext } from "@/lib/tenancy";
 import {
   type AgentExport,
@@ -142,6 +143,41 @@ describe.skipIf(!dbUp)("agent export/import", () => {
     expect(JSON.stringify(exp)).not.toMatch(/sk-[A-Za-z0-9]{16}/);
     // And no tenant-local `vault:<id>` survives translation (the export guard backstops this).
     expect(JSON.stringify(exp)).not.toContain("vault:");
+  });
+
+  // A hand-written export is operator input like any other, and it lands through a third write path.
+  // The host list is reduced to hosts there too, or an imported bundle reintroduces exactly what the
+  // editor and the update path were taught not to store.
+  test("an imported host list is reduced to hosts before it is stored", async () => {
+    const exp = await exportAgent(ctx(), agentId, appDb);
+    const imported = {
+      ...exp,
+      agent: {
+        ...exp.agent,
+        name: "Vendedora importada",
+        settings: {
+          ...exp.agent.settings,
+          sendImage: {
+            allowedHosts: [
+              "https://usuario:senha-secreta@cdn.loja.com.br/x.png?sig=deadbeef",
+            ],
+          },
+        },
+      },
+    };
+    const { agent } = await importAgent(ctx(), imported, appDb);
+    const row = await suDb.agent.findFirstOrThrow({
+      where: { id: BigInt(agent.id) },
+      select: { settings: true },
+    });
+    expect(
+      (
+        (row.settings as Record<string, unknown>).sendImage as {
+          allowedHosts: string[];
+        }
+      ).allowedHosts,
+    ).toEqual(["cdn.loja.com.br"]);
+    expect(JSON.stringify(row.settings)).not.toContain("senha-secreta");
   });
 
   test("round-trip import recreates the agent DISABLED with resolved refs", async () => {
@@ -298,6 +334,21 @@ describe.skipIf(!dbUp)("agent export/import", () => {
     );
   });
 
+  test("import REJECTS a system prompt over the cap with the specific error", async () => {
+    const exp = await exportAgent(ctx(), agentId, appDb);
+    const oversized = {
+      ...exp,
+      agent: {
+        ...exp.agent,
+        name: "Vendedora PromptGigante",
+        systemPrompt: "p".repeat(config.agent.promptMaxChars + 1),
+      },
+    };
+    await expect(importAgent(ctx(), oversized, appDb)).rejects.toThrow(
+      /system prompt is too long/,
+    );
+  });
+
   test("import with CONFLICTING metadata (same name under two kinds) warns and leaves the ref unset", async () => {
     const exp = await exportAgent(ctx(), agentId, appDb);
     // Craft an export whose metadata lists llm-key under TWO kinds: the bare-name refs in the
@@ -386,6 +437,9 @@ describe.skipIf(!dbUp)("agent export/import with components", () => {
         urlTemplate: "https://api.example.com/o/{{id}}",
         allowedHosts: ["api.example.com"],
         credentialRef: `vault:${key.id}`,
+        // A lookup that answers 404 for "no such order" is the canonical case of issue #59, and it
+        // is exactly the sort of tool an operator moves between instances.
+        expectedStatuses: [404],
       },
     });
     const mcp = await suDb.mcpServerConnection.create({
@@ -523,6 +577,9 @@ describe.skipIf(!dbUp)("agent export/import with components", () => {
       where: { tenantId: dstTenant, name: "lookup_order" },
     });
     expect(td?.label).toBe("Buscar pedido");
+    // Review finding, round 1: a declaration dropped in transfer makes the destination resume
+    // alerting on a status the operator had already ruled a result, with nothing to point at.
+    expect(td?.expectedStatuses).toEqual([404]);
     // credential absent on the destination ⇒ re-created as a PENDING entry with the ref kept wired
     // (the operator only fills the secret), not dropped.
     expect(td?.credentialRef).toMatch(/^vault:/);
@@ -575,6 +632,39 @@ describe.skipIf(!dbUp)("agent export/import with components", () => {
       "MCP",
       "RAG",
     ]);
+  });
+
+  test("import canonicalizes legacy authoring shapes (JSON-Schema inputSchema, single-brace {var})", async () => {
+    const exp = await exportAgent(srcCtx(), srcAgentId, appDb, {
+      includeComponents: true,
+    });
+    // NOTE: simulate a bundle exported from a pre-normalization instance: rename the tool so the
+    // import creates it fresh, and regress its shapes to the legacy authoring forms.
+    const legacy = structuredClone(exp);
+    const tool = legacy.components?.httpTools.find(
+      (h) => h.name === "lookup_order",
+    );
+    if (!tool) throw new Error("bundle missing lookup_order");
+    tool.name = "legacy_lookup";
+    tool.urlTemplate = "https://shop.example.com/orders/{order_id}";
+    tool.inputSchema = {
+      required: ["order_id"],
+      properties: { order_id: { type: "string" } },
+    };
+    const grant = legacy.agent.tools.find(
+      (g) => g.source === "HTTP" && g.tool === "lookup_order",
+    );
+    if (grant?.source === "HTTP") grant.tool = "legacy_lookup";
+    await importAgent(dstCtx(), legacy, appDb);
+    const row = await suDb.toolDefinition.findFirst({
+      where: { tenantId: dstTenant, name: "legacy_lookup" },
+    });
+    expect(row?.urlTemplate).toBe(
+      "https://shop.example.com/orders/{{order_id}}",
+    );
+    expect(row?.inputSchema).toEqual({
+      order_id: { type: "string", required: true },
+    });
   });
 
   test("re-import reuses same-name components (never overwrites) and warns", async () => {

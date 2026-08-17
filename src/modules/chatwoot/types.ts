@@ -42,6 +42,14 @@ export interface NormalizedChatwootAttachment {
   // message_created; populated once our STT write-back lands (which the fork re-dispatches as a
   // message_updated). Read to make eager STT idempotent and to render the transcription in the UI.
   transcribedText?: string | null;
+  // NOTE: Location attachments (a WhatsApp pin) also ship their coordinates + human-readable place
+  // name in the payload (Attachment#push_event_data → location_metadata: coordinates_lat /
+  // coordinates_long / fallback_title). The columns default to 0.0, so an exact (0,0) means "the
+  // provider sent no coordinates", not a real pin (see firstLocationAttachment). Absent on every
+  // other file_type.
+  latitude?: number | null;
+  longitude?: number | null;
+  fallbackTitle?: string | null;
 }
 
 export interface NormalizedChatwootMessage {
@@ -82,6 +90,10 @@ export interface NormalizedChatwootContact {
   email: string | null;
   phone: string | null;
   identifier: string | null;
+  // NOTE: meta.sender.custom_attributes — Contact#push_event_data ships the whole jsonb on every
+  // event, which is what lets the agent READ it with no extra API call. `undefined` = the payload
+  // did not carry it ⇒ the mirror keeps whatever it had (never wiped by a degraded payload).
+  customAttributes?: Record<string, unknown>;
 }
 
 export interface NormalizedChatwootEvent {
@@ -94,10 +106,14 @@ export interface NormalizedChatwootEvent {
   contactInboxId: number | null;
   inboxId: number | null;
   status: string | null;
-  assigneeType: string | null;
-  assigneeId: number | null;
-  // Display name of the assignee (meta.assignee.name) — only meaningful for a human (User) assignee.
-  assigneeName: string | null;
+  // NOTE: The assignee trio uses `undefined` as "this payload said nothing" (no `meta`), so the
+  // mirror keeps the stored values instead of wiping them — same convention as the attribute bags.
+  // An explicit `null` means meta WAS present with no assignee: a real unassign, and it clears.
+  assigneeType?: string | null;
+  assigneeId?: number | null;
+  // NOTE: Display name of the assignee (meta.assignee.name) — the human's name for a User
+  // assignee, the bot's name for an AgentBot one.
+  assigneeName?: string | null;
   message?: NormalizedChatwootMessage;
   changedAttributes?: unknown;
   // ── mirror metadata (best-effort; absent on payloads that do not carry it) ──
@@ -107,4 +123,18 @@ export interface NormalizedChatwootEvent {
   // last_activity_at as unix SECONDS (EventDataPresenter push_timestamps); drives the
   // monotonic lastEventAt guard so out-of-order deliveries cannot regress mirror state.
   lastActivityAt?: number | null;
+  // NOTE: The CONVERSATION row's `updated_at` as unix seconds WITH FRACTION (push_timestamps sends
+  // `updated_at.to_f`, upstream since Chatwoot 4.0.2). It is the version stamp of the state this
+  // payload describes — unlike last_activity_at it advances on a status or assignee change, and it
+  // has sub-second resolution — so it, not last_activity_at, orders conversation-level state.
+  // `null` on a Chatwoot too old to send it.
+  conversationUpdatedAt?: number | null;
+  // The CONVERSATION's custom attributes (conversation.custom_attributes on EventDataPresenter
+  // push_data). Mirrored for the agent's attribute context. `undefined` ⇒ absent from this payload.
+  customAttributes?: Record<string, unknown>;
+  // The linked kanban CARD's custom attributes (conversation.kanban_task.custom_attributes — the Pro
+  // fork's FazerAi::Conversations::EventDataPresenter adds `kanban_task` to push_data, and
+  // Kanban::Task#common_event_data carries `custom_attributes`). `undefined` ⇒ absent (upstream
+  // Chatwoot, or a conversation with no card).
+  kanbanAttributes?: Record<string, unknown>;
 }

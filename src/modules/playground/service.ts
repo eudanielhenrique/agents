@@ -45,7 +45,12 @@ import { AppError, NotFoundError } from "@/lib/errors";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
 import type { ChatwootClient } from "@/modules/chatwoot/client";
 import { renderInboundMessage } from "@/modules/chatwoot/render";
-import { type FlowContext, withFlowStage } from "@/modules/flowlog/service";
+import {
+  emitFlowEvent,
+  type FlowContext,
+  withFlowStage,
+} from "@/modules/flowlog/service";
+import { readObservabilityConfig } from "@/modules/flowlog/settings";
 import {
   readFollowUpConfig,
   stepDelayMinutes,
@@ -227,6 +232,9 @@ async function buildPlaygroundGraph(params: {
   overrides?: AgentConfigOverrides;
   // Reused as the Langfuse trace id (item 10) so a playground trace correlates with the turn.
   turnId?: string;
+  // Same warn line the reactive turn leaves when a model call had to be retried. The caller passes
+  // it because the FlowContext is the caller's.
+  onModelRetry?: (info: { attempt: number; error: unknown }) => void;
 }) {
   const { tenantId, agentId, threadId, base } = params;
   const loaded = await loadPlaygroundConfig({
@@ -257,6 +265,7 @@ async function buildPlaygroundGraph(params: {
   const graph = await buildModelAndGraph(loaded, tools, {
     makeModel: params.deps?.makeModel,
     checkpointer: params.deps?.checkpointer,
+    onModelRetry: params.onModelRetry,
   });
   // Tag usage as playground so it never pollutes the real dashboard figures (the dashboard
   // defaults to source="inbox"). inboxId is null here (no mirror conversation).
@@ -268,7 +277,7 @@ async function buildPlaygroundGraph(params: {
     turnId: params.turnId,
     tools,
   });
-  return { graph, callbacks, loaded, traceLabels };
+  return { graph, callbacks, loaded, tools, traceLabels };
 }
 
 export type PlaygroundToolCategory =
@@ -388,18 +397,9 @@ export async function runPlaygroundTurn(
 
   // One id correlates the ExecutionLog turn, the tool-call logs, and the Langfuse trace (item 10).
   const turnId = crypto.randomUUID();
-  const { graph, callbacks, loaded, traceLabels } = await buildPlaygroundGraph({
-    tenantId,
-    agentId,
-    threadId,
-    base,
-    deps: params.deps,
-    overrides: params.overrides,
-    turnId,
-  });
-
   // Execution-flow telemetry, tagged source=playground so it never pages an alert channel and stays
-  // out of the dashboard's real view (the Logs page can still filter to it).
+  // out of the dashboard's real view (the Logs page can still filter to it). Built before the graph
+  // because the graph's retry callback writes to it.
   const flow: FlowContext = {
     tenantId,
     turnId,
@@ -408,6 +408,23 @@ export async function runPlaygroundTurn(
     threadId,
     base,
   };
+  const { graph, callbacks, loaded, tools, traceLabels } =
+    await buildPlaygroundGraph({
+      tenantId,
+      agentId,
+      threadId,
+      base,
+      deps: params.deps,
+      overrides: params.overrides,
+      turnId,
+      onModelRetry: ({ attempt }) =>
+        emitFlowEvent(flow, {
+          stage: "generate",
+          level: "warn",
+          status: "ok",
+          detail: { retriedEmptyResponse: attempt },
+        }),
+    });
 
   // Give the human message an explicit id when we have media to link to it (so reopening the
   // session can re-attach the recorded audio / uploaded file to this exact turn).
@@ -429,7 +446,13 @@ export async function runPlaygroundTurn(
             configurable: { thread_id: threadId },
             // ToolFlowLogger so playground tool calls land in the Logs page (item 3), same as a
             // real turn does in runLoadedTurn.
-            callbacks: [...callbacks, new ToolFlowLogger(flow)],
+            callbacks: [
+              ...callbacks,
+              new ToolFlowLogger(flow, {
+                logValues: loaded.logToolValues,
+                tools,
+              }),
+            ],
           },
         ),
     );
@@ -555,17 +578,9 @@ export async function runPlaygroundFollowup(
 
   // One id correlates the tool-call logs and the Langfuse trace for this simulated follow-up.
   const turnId = crypto.randomUUID();
-  const { graph, callbacks, traceLabels } = await buildPlaygroundGraph({
-    tenantId,
-    agentId,
-    threadId,
-    base,
-    deps: params.deps,
-    overrides: params.overrides,
-    turnId,
-  });
   // Flow telemetry tagged source=playground (never pages an alert channel, stays out of the
-  // dashboard) so the simulated follow-up's tool calls show up in the Logs page (item 3).
+  // dashboard) so the simulated follow-up's tool calls show up in the Logs page (item 3). Built
+  // before the graph because the graph's retry callback writes to it.
   const flow: FlowContext = {
     tenantId,
     turnId,
@@ -574,15 +589,30 @@ export async function runPlaygroundFollowup(
     threadId,
     base,
   };
+  const { graph, callbacks, tools, traceLabels } = await buildPlaygroundGraph({
+    tenantId,
+    agentId,
+    threadId,
+    base,
+    deps: params.deps,
+    overrides: params.overrides,
+    turnId,
+    onModelRetry: ({ attempt }) =>
+      emitFlowEvent(flow, {
+        stage: "generate",
+        level: "warn",
+        status: "ok",
+        detail: { retriedEmptyResponse: attempt },
+      }),
+  });
 
   // Draft settings (if present) drive the follow-up instructions/delay so the simulation matches
   // what the operator is editing live; otherwise the saved settings.
   const agent = await runScopedOn(base, sysCtx(tenantId), (db) =>
     db.agent.findUnique({ where: { id: agentId }, select: { settings: true } }),
   );
-  const followUp = readFollowUpConfig(
-    params.overrides?.settings ?? agent?.settings,
-  );
+  const settings = params.overrides?.settings ?? agent?.settings;
+  const followUp = readFollowUpConfig(settings);
   // The playground previews the FIRST step's message (the simulation has no real schedule). Post
   // actions (label/resolve) are NOT applied here — there is no real conversation to act on.
   const firstStep = followUp.steps[0];
@@ -606,7 +636,13 @@ export async function runPlaygroundFollowup(
       { messages: [new HumanMessage(renderNudge(nudge, true))] },
       {
         configurable: { thread_id: threadId },
-        callbacks: [...callbacks, new ToolFlowLogger(flow)],
+        callbacks: [
+          ...callbacks,
+          new ToolFlowLogger(flow, {
+            logValues: readObservabilityConfig(settings).logToolValues,
+            tools,
+          }),
+        ],
       },
     );
   } catch (e) {

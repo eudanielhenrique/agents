@@ -1,4 +1,5 @@
 import basePrisma from "@/api/lib/prisma";
+import { normalizeExpectedStatuses } from "@/graph/tools/http-status";
 import { AppError } from "@/lib/errors";
 import type { TenantContext } from "@/lib/tenancy";
 import {
@@ -23,6 +24,7 @@ import {
   type McpConnectionUpdate,
   updateMcpConnection,
 } from "@/modules/mcp-connections/service";
+import { normalizeToolShapes } from "@/modules/tool-definitions/normalize";
 import {
   createToolDefinition,
   deleteToolDefinition,
@@ -455,6 +457,7 @@ export interface ToolWriteArgs {
   credential_ref?: string | null;
   enabled?: boolean;
   risk_tier?: "low" | "medium" | "high";
+  expected_statuses?: number[];
   ack_enabled?: boolean;
   ack_message?: string | null;
 }
@@ -479,6 +482,10 @@ async function buildToolPatch(
   if (args.body !== undefined) patch.body = args.body;
   if (args.enabled !== undefined) patch.enabled = args.enabled;
   if (args.risk_tier !== undefined) patch.riskTier = args.risk_tier;
+  // Normalized HERE and not only in the service: this patch is also what a dry run shows as the
+  // preview, and a preview that echoes the raw argument promises a shape the apply would not write.
+  if (args.expected_statuses !== undefined)
+    patch.expectedStatuses = normalizeExpectedStatuses(args.expected_statuses);
   if (args.ack_enabled !== undefined) patch.ackEnabled = args.ack_enabled;
   if (args.ack_message !== undefined) patch.ackMessage = args.ack_message;
   if (args.credential_ref !== undefined) {
@@ -514,13 +521,24 @@ export async function toolCreate(
     urlTemplate: args.url_template,
     allowedHosts: args.allowed_hosts,
   } as ToolDefinitionCreate;
+  // NOTE: surface what the service will canonicalize (JSON-Schema input_schema, single-brace
+  // {var}) so the author sees the converted shape and probable typos in the preview.
+  const norm = normalizeToolShapes({
+    urlTemplate: input.urlTemplate,
+    query: input.query,
+    headers: input.headers,
+    body: input.body,
+    inputSchema: input.inputSchema,
+  });
+  const warnings = norm.warnings.length > 0 ? { warnings: norm.warnings } : {};
   try {
     if (args.dry_run !== false) {
       return ok({
         dryRun: true,
         action: "create",
         resource: "tool",
-        preview: input,
+        preview: { ...input, ...norm.shapes },
+        ...warnings,
       });
     }
     const created = await createToolDefinition(ctx, input, base);
@@ -533,7 +551,13 @@ export async function toolCreate(
       before: null,
       after: truncForAudit({ id: created.id, name: created.name }),
     });
-    return ok({ dryRun: false, applied: true, target, tool: created });
+    return ok({
+      dryRun: false,
+      applied: true,
+      target,
+      tool: created,
+      ...warnings,
+    });
   } catch (e) {
     return failOf(e);
   }
@@ -556,12 +580,36 @@ export async function toolUpdate(
   }
   try {
     const current = await getToolDefinition(ctx, id, base);
+    // NOTE: preview the canonical form the service will store (JSON-Schema input_schema converted,
+    // single-brace {var} normalized against the effective field set) plus probable-typo warnings.
+    const norm = normalizeToolShapes(
+      {
+        urlTemplate: built.patch.urlTemplate,
+        query: built.patch.query,
+        headers: built.patch.headers,
+        body: built.patch.body,
+        inputSchema: built.patch.inputSchema,
+      },
+      {
+        urlTemplate: current.urlTemplate,
+        query: current.query,
+        headers: current.headers,
+        body: current.body,
+        inputSchema: current.inputSchema,
+      },
+    );
+    const normalizedPatch = {
+      ...built.patch,
+      ...norm.shapes,
+    } as ToolDefinitionUpdate;
+    const warnings =
+      norm.warnings.length > 0 ? { warnings: norm.warnings } : {};
     const keys = Object.keys(built.patch) as (keyof ToolDefinitionUpdate)[];
     const beforeProj: Record<string, unknown> = {};
     const afterProj: Record<string, unknown> = {};
     for (const k of keys) {
       beforeProj[k] = (current as unknown as Record<string, unknown>)[k];
-      afterProj[k] = built.patch[k];
+      afterProj[k] = normalizedPatch[k];
     }
     const target = `tool:${id}`;
     if (args.dry_run !== false) {
@@ -569,6 +617,7 @@ export async function toolUpdate(
         dryRun: true,
         target,
         diff: diffFields(beforeProj, afterProj),
+        ...warnings,
       });
     }
     const updated = await updateToolDefinition(ctx, id, built.patch, base);
@@ -588,6 +637,7 @@ export async function toolUpdate(
       applied: true,
       target,
       diff: diffFields(beforeProj, appliedProj),
+      ...warnings,
     });
   } catch (e) {
     return failOf(e);

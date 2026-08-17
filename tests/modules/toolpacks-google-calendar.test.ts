@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { ToolMessage } from "@langchain/core/messages";
 import type { PrismaClient } from "@/../generated/prisma/client";
 import { googleCalendarToolpack } from "@/modules/integrations/toolpacks/google-calendar";
 import type {
@@ -211,11 +212,13 @@ describe("google calendar toolpack — credential + calendar binding", () => {
     );
   });
 
+  // Several allowed calendars is the ONLY case where this boundary exists: with a single one the arg
+  // is not even exposed (see the pinned-calendar suite below), so there is no value to fence.
   test("a calendarId arg outside the allowlist is rejected, no fetch (injection boundary)", async () => {
     const { impl, calls } = stubFetch(200, { items: [] });
     const out = (await toolFor(
       "calendar_list_events",
-      { calendarIds: ["a@g.com"] },
+      { calendarIds: ["a@g.com", "b@g.com"] },
       baseCtx({ fetchImpl: impl }),
     )?.invoke({ calendarId: "evil@g.com" })) as string;
     expect(out).toContain("not allowed");
@@ -235,6 +238,91 @@ describe("google calendar toolpack — credential + calendar binding", () => {
     expect(calls[0]?.url).toContain(
       `/calendars/${encodeURIComponent("a@g.com")}/events`,
     );
+  });
+});
+
+// A support report: an integration with ONE allowed calendar, and the agent calling availability with
+// calendarId set to a string that is not a calendar at all. The tool refused, and only omitting the
+// arg worked. The arg was offered with no hint of a valid value, because the <allowed_calendars> block
+// is deliberately suppressed when there is nothing to choose.
+describe("google calendar toolpack — a single allowed calendar is pinned", () => {
+  const PINNED = "clinic@group.calendar.google.com";
+  const ONE = {
+    calendarIds: [PINNED],
+    calendarLabels: { [PINNED]: "Clinic" },
+  };
+  const SEVERAL = {
+    calendarIds: [PINNED, "second@group.calendar.google.com"],
+    calendarLabels: { [PINNED]: "Clinic" },
+  };
+  // What a model with no valid value in sight fills the optional arg with.
+  const INVENTED = "My Calendar Integration";
+  const EVERY_TOOL = googleCalendarToolpack.toolSpecs.map((s) => s.name);
+
+  function argsOf(tool: { schema: unknown } | undefined): string[] {
+    const shape = (tool?.schema as { shape?: Record<string, unknown> })?.shape;
+    return Object.keys(shape ?? {});
+  }
+
+  test("no tool offers a calendarId arg: there is nothing to pick", () => {
+    expect(EVERY_TOOL).toHaveLength(6);
+    for (const name of EVERY_TOOL) {
+      expect(argsOf(toolFor(name, ONE, baseCtx()))).not.toContain("calendarId");
+    }
+  });
+
+  test("with several allowed calendars every tool keeps the arg", () => {
+    for (const name of EVERY_TOOL) {
+      expect(argsOf(toolFor(name, SEVERAL, baseCtx()))).toContain("calendarId");
+    }
+  });
+
+  test("availability: an invented calendarId is dropped, not refused", async () => {
+    // Google keys the freeBusy response by the calendar it was asked about, so the stub answers for
+    // the pinned one: a response keyed by the invented name would be a fixture the API cannot produce.
+    const { impl, calls } = stubFetch(200, {
+      calendars: { [PINNED]: { busy: [] } },
+    });
+    const out = (await toolFor(
+      "calendar_check_availability",
+      ONE,
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke({
+      timeMin: "2099-06-22T00:00:00-03:00",
+      timeMax: "2099-06-22T23:59:00-03:00",
+      calendarId: INVENTED,
+    })) as string;
+    expect(out).not.toContain("not allowed");
+    expect(calls[0]?.url).toContain("/freeBusy");
+    expect(bodyOf(calls[0] as { init: RequestInit })).toMatchObject({
+      items: [{ id: PINNED }],
+    });
+  });
+
+  test("list: an invented calendarId is dropped, not refused", async () => {
+    const { impl, calls } = stubFetch(200, { items: [] });
+    const out = (await toolFor(
+      "calendar_list_events",
+      ONE,
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke({ calendarId: INVENTED })) as string;
+    expect(out).not.toContain("not allowed");
+    expect(calls[0]?.url).toContain(
+      `/calendars/${encodeURIComponent(PINNED)}/events`,
+    );
+  });
+
+  test("the description names the pinned calendar instead of listing options", () => {
+    const pinned = toolFor("calendar_check_availability", ONE, baseCtx());
+    expect(pinned?.description).toContain(`<active_calendar name="Clinic"`);
+    expect(pinned?.description).toContain(`id="${PINNED}"`);
+    expect(pinned?.description).not.toContain("<allowed_calendars>");
+  });
+
+  test("with several allowed calendars the description still lists them", () => {
+    const many = toolFor("calendar_check_availability", SEVERAL, baseCtx());
+    expect(many?.description).toContain("<allowed_calendars>");
+    expect(many?.description).not.toContain("<active_calendar");
   });
 });
 
@@ -632,6 +720,59 @@ describe("google calendar toolpack — event date shaping + default timezone", (
       timeZone: "America/Sao_Paulo",
     });
   });
+
+  // A patch that sets only dateTime leaves the all-day `date` on the event, and Google rejects an
+  // event carrying both (HTTP 400). Both directions must null the field they replace.
+  test("update: all-day → timed nulls the date field", async () => {
+    const { impl, calls } = stubFetch(200, {
+      id: "ev_5",
+      extendedProperties: stampedExt,
+      start: { dateTime: "2026-06-20T00:00:00-03:00" },
+      end: { dateTime: "2026-06-20T23:59:00-03:00" },
+    });
+    await toolFor(
+      "calendar_update_event",
+      {},
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke({
+      eventId: "ev_5",
+      start: "2026-06-20T00:00:00-03:00",
+      end: "2026-06-20T23:59:00-03:00",
+    });
+    // calls[0] is the ownership re-fetch; calls[1] is the PATCH.
+    const body = bodyOf(calls[1] as { init: RequestInit });
+    expect(body.start).toEqual({
+      dateTime: "2026-06-20T00:00:00-03:00",
+      timeZone: "America/Sao_Paulo",
+      date: null,
+    });
+    expect(body.end).toEqual({
+      dateTime: "2026-06-20T23:59:00-03:00",
+      timeZone: "America/Sao_Paulo",
+      date: null,
+    });
+  });
+
+  test("update: timed → all-day nulls the dateTime field", async () => {
+    const { impl, calls } = stubFetch(200, {
+      id: "ev_6",
+      extendedProperties: stampedExt,
+      start: { date: "2026-06-20" },
+      end: { date: "2026-06-21" },
+    });
+    await toolFor(
+      "calendar_update_event",
+      {},
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke({
+      eventId: "ev_6",
+      start: "2026-06-20",
+      end: "2026-06-21",
+    });
+    const body = bodyOf(calls[1] as { init: RequestInit });
+    expect(body.start).toEqual({ date: "2026-06-20", dateTime: null });
+    expect(body.end).toEqual({ date: "2026-06-21", dateTime: null });
+  });
 });
 
 describe("google calendar toolpack — list + availability", () => {
@@ -781,5 +922,366 @@ describe("google calendar toolpack — list + availability", () => {
     )?.invoke({})) as string;
     expect(out).toContain("403");
     expect(out).not.toContain("SECRET_TOK");
+  });
+});
+
+// A fetch stub that routes by URL substring (freeBusy vs each blocking calendar's events.list).
+function routedFetch(
+  routes: Array<{ match: string; status?: number; json: unknown }>,
+) {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const impl = (async (url: string | URL | Request, init?: RequestInit) => {
+    const u = String(url);
+    calls.push({ url: u, init: init ?? {} });
+    const r = routes.find((x) => u.includes(x.match));
+    if (!r) throw new Error(`routedFetch: unrouted request ${u}`);
+    return new Response(JSON.stringify(r.json), {
+      status: r.status ?? 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+  return { impl, calls };
+}
+
+describe("google calendar toolpack — blocking calendars (issue #1)", () => {
+  const BLOQ = "bloqueios@group.calendar.google.com";
+  const RANGE = {
+    timeMin: "2099-06-22T09:00:00-03:00",
+    timeMax: "2099-06-22T12:00:00-03:00",
+  };
+  const HOURLY = {
+    slotDurationMinutes: 60,
+    slotGranularityMinutes: 60,
+    blockingCalendarIds: [BLOQ],
+  };
+  const FREE = { calendars: { primary: { busy: [] } } };
+
+  test("reads each blocking calendar via events.list (no contact fence, no titles requested)", async () => {
+    const { impl, calls } = routedFetch([
+      { match: "/freeBusy", json: FREE },
+      { match: "bloqueios%40group", json: { items: [] } },
+    ]);
+    const out = (await toolFor(
+      "calendar_check_availability",
+      HOURLY,
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke(RANGE)) as string;
+    expect(JSON.parse(out).slots).toHaveLength(3);
+    expect(calls).toHaveLength(2);
+    const evUrl = calls[1]?.url ?? "";
+    expect(evUrl).toContain(
+      "/calendars/bloqueios%40group.calendar.google.com/events",
+    );
+    expect(evUrl).toContain("singleEvents=true");
+    expect(evUrl).toContain("fields=items%28start%2Cend%29%2CnextPageToken");
+    expect(evUrl).not.toContain("privateExtendedProperty");
+  });
+
+  test("fail-closed: a truncated blocking page (nextPageToken) refuses instead of trusting partial data", async () => {
+    const { impl } = routedFetch([
+      { match: "/freeBusy", json: FREE },
+      {
+        match: "bloqueios%40group",
+        json: { items: [], nextPageToken: "tok_more" },
+      },
+    ]);
+    const out = (await toolFor(
+      "calendar_check_availability",
+      HOURLY,
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke(RANGE)) as string;
+    expect(out).toContain("cannot be verified");
+    expect(out).not.toContain("slots");
+  });
+
+  test("a timed blocking event drops the overlapping slot", async () => {
+    const { impl } = routedFetch([
+      { match: "/freeBusy", json: FREE },
+      {
+        match: "bloqueios%40group",
+        json: {
+          items: [
+            {
+              start: { dateTime: "2099-06-22T10:00:00-03:00" },
+              end: { dateTime: "2099-06-22T11:00:00-03:00" },
+            },
+          ],
+        },
+      },
+    ]);
+    const out = (await toolFor(
+      "calendar_check_availability",
+      HOURLY,
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke(RANGE)) as string;
+    const parsed = JSON.parse(out) as { slots: { start: string }[] };
+    expect(parsed.slots.map((s) => localHM(s.start))).toEqual([
+      "09:00",
+      "11:00",
+    ]);
+  });
+
+  test("an all-day event blocks the whole local day, even marked transparent (the freeBusy blind spot)", async () => {
+    // All-day events default to transparency "transparent" ("Free"), which freeBusy ignores; the
+    // holiday calendar from the issue is exactly this shape, so blocking reads events.list instead.
+    const { impl } = routedFetch([
+      { match: "/freeBusy", json: FREE },
+      {
+        match: "bloqueios%40group",
+        json: {
+          items: [
+            {
+              start: { date: "2099-06-22" },
+              end: { date: "2099-06-23" },
+              transparency: "transparent",
+            },
+          ],
+        },
+      },
+    ]);
+    const out = (await toolFor(
+      "calendar_check_availability",
+      HOURLY,
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke(RANGE)) as string;
+    expect(JSON.parse(out).slots).toEqual([]);
+  });
+
+  test("fail-closed: an unreadable blocking calendar refuses instead of offering slots", async () => {
+    const { impl } = routedFetch([
+      { match: "/freeBusy", json: FREE },
+      { match: "bloqueios%40group", status: 404, json: { error: "notFound" } },
+    ]);
+    const out = (await toolFor(
+      "calendar_check_availability",
+      HOURLY,
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke(RANGE)) as string;
+    expect(out).toContain("blocking calendar");
+    expect(out).toContain("404");
+    expect(out).not.toContain("slots");
+  });
+
+  test("a blocking id that equals the active booking calendar is ignored (no extra request)", async () => {
+    const { impl, calls } = routedFetch([{ match: "/freeBusy", json: FREE }]);
+    const out = (await toolFor(
+      "calendar_check_availability",
+      { ...HOURLY, blockingCalendarIds: ["primary"] },
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke(RANGE)) as string;
+    expect(JSON.parse(out).slots).toHaveLength(3);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("fail-closed: a network failure reading a blocking calendar refuses", async () => {
+    const impl = (async (url: string | URL | Request) => {
+      if (String(url).includes("bloqueios%40group")) {
+        throw new Error("network down");
+      }
+      return new Response(JSON.stringify(FREE), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const out = (await toolFor(
+      "calendar_check_availability",
+      HOURLY,
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke(RANGE)) as string;
+    expect(out).toContain("Failed to read a blocking calendar");
+    expect(out).not.toContain("slots");
+  });
+
+  test("fail-closed: more blocking calendars than the cap refuses without fanning out", async () => {
+    const many = Array.from({ length: 11 }, (_, i) => `b${i}@demo.local`);
+    const { impl, calls } = routedFetch([{ match: "/freeBusy", json: FREE }]);
+    const out = (await toolFor(
+      "calendar_check_availability",
+      { ...HOURLY, blockingCalendarIds: many },
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke(RANGE)) as string;
+    expect(out).toContain("Too many blocking calendars");
+    expect(calls).toHaveLength(1);
+  });
+
+  test("list_events description warns that blocked/foreign events are never visible", () => {
+    const tool = toolFor("calendar_list_events", {}, baseCtx());
+    expect(tool?.description).toContain("does NOT mean the calendar is free");
+    expect(tool?.description).toContain("calendar_check_availability");
+  });
+});
+
+// NOTE: a booked "call" must hand the customer a real meeting room: without conferenceData the model only
+// ever gets htmlLink, the calendar PAGE of the event. Two API traps pinned here: the Google API
+// honors conferenceData only when the request carries conferenceDataVersion=1 (silently ignored
+// otherwise), and createRequest.requestId must be unique per event (a reused id returns the SAME
+// room, so different leads would share a meeting).
+describe("google calendar toolpack — Meet room on create", () => {
+  const CREATED = {
+    id: "ev9",
+    summary: "Demo",
+    start: { dateTime: "2026-08-10T14:00:00-03:00" },
+    end: { dateTime: "2026-08-10T15:00:00-03:00" },
+    htmlLink: "https://cal/ev9",
+    hangoutLink: "https://meet.google.com/abc-defg-hij",
+  };
+  const INPUT = {
+    summary: "Demo",
+    start: "2026-08-10T14:00:00-03:00",
+    end: "2026-08-10T15:00:00-03:00",
+  };
+
+  test("create asks Google for a Meet room by default (body + conferenceDataVersion=1)", async () => {
+    const { impl, calls } = stubFetch(200, CREATED);
+    await toolFor(
+      "calendar_create_event",
+      {},
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke(INPUT);
+    expect(calls[0]?.url).toContain("conferenceDataVersion=1");
+    const body = bodyOf(calls[0] as { init: RequestInit });
+    const conf = body.conferenceData as {
+      createRequest?: {
+        requestId?: string;
+        conferenceSolutionKey?: { type?: string };
+      };
+    };
+    expect(conf?.createRequest?.conferenceSolutionKey?.type).toBe(
+      "hangoutsMeet",
+    );
+    expect(typeof conf?.createRequest?.requestId).toBe("string");
+  });
+
+  test("each create uses a fresh requestId", async () => {
+    const { impl, calls } = stubFetch(200, CREATED);
+    const tool = toolFor(
+      "calendar_create_event",
+      {},
+      baseCtx({ fetchImpl: impl }),
+    );
+    await tool?.invoke(INPUT);
+    await tool?.invoke(INPUT);
+    const rid = (i: number) =>
+      (
+        bodyOf(calls[i] as { init: RequestInit }).conferenceData as {
+          createRequest?: { requestId?: string };
+        }
+      )?.createRequest?.requestId;
+    expect(rid(0)).toBeTruthy();
+    expect(rid(1)).toBeTruthy();
+    expect(rid(0)).not.toBe(rid(1));
+  });
+
+  test("the returned event exposes meetLink (hangoutLink), the link to hand the customer", async () => {
+    const { impl } = stubFetch(200, CREATED);
+    const out = (await toolFor(
+      "calendar_create_event",
+      {},
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke(INPUT)) as string;
+    expect(JSON.parse(out)).toMatchObject({
+      id: "ev9",
+      meetLink: "https://meet.google.com/abc-defg-hij",
+    });
+  });
+
+  test("createMeetLink: false keeps today's body and URL (calendar as a pure busy-block)", async () => {
+    const { impl, calls } = stubFetch(200, { id: "ev9" });
+    await toolFor(
+      "calendar_create_event",
+      { createMeetLink: false },
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke(INPUT);
+    expect(calls[0]?.url).not.toContain("conferenceDataVersion");
+    expect(
+      bodyOf(calls[0] as { init: RequestInit }).conferenceData,
+    ).toBeUndefined();
+  });
+
+  test("a pending room is re-read once so the reply still carries meetLink", async () => {
+    // NOTE: the POST answers without hangoutLink (createRequest still pending); one follow-up GET has it.
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const responses: unknown[] = [
+      {
+        ...CREATED,
+        hangoutLink: undefined,
+        conferenceData: {
+          createRequest: { status: { statusCode: "pending" } },
+        },
+      },
+      CREATED,
+    ];
+    let n = 0;
+    const impl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      const body = responses[Math.min(n, responses.length - 1)];
+      n += 1;
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const out = (await toolFor(
+      "calendar_create_event",
+      {},
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke(INPUT)) as string;
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.init.method).toBe("GET");
+    expect(JSON.parse(out)).toMatchObject({
+      meetLink: "https://meet.google.com/abc-defg-hij",
+    });
+  });
+});
+
+// NOTE: Integration failures must reach the flow log as failures (issue #40): invoked as a
+// tool_call, a provider/credential failure returns a ToolMessage with status "error" (same friendly
+// content), while bad model input stays a plain success — it is normal operation, not an outage.
+describe("google calendar toolpack — integration failures are marked (issue #40)", () => {
+  test("a non-2xx and a missing credential return ToolMessage status error", async () => {
+    const { impl } = stubFetch(500, { error: "boom" });
+    const http = (await toolFor(
+      "calendar_list_events",
+      {},
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke({
+      type: "tool_call",
+      id: "call_cal_1",
+      name: "calendar_list_events",
+      args: {},
+    })) as ToolMessage;
+    expect(http.status).toBe("error");
+    expect(String(http.content)).toContain("500");
+
+    const notConnected = (await toolFor(
+      "calendar_list_events",
+      {},
+      baseCtx({ resolveCredential: async () => null }),
+    )?.invoke({
+      type: "tool_call",
+      id: "call_cal_2",
+      name: "calendar_list_events",
+      args: {},
+    })) as ToolMessage;
+    expect(notConnected.status).toBe("error");
+    expect(String(notConnected.content)).toContain("not connected");
+  });
+
+  test("bad model input (range over 24h) is NOT marked as a failure", async () => {
+    const out = (await toolFor(
+      "calendar_check_availability",
+      {},
+      baseCtx(),
+    )?.invoke({
+      type: "tool_call",
+      id: "call_cal_3",
+      name: "calendar_check_availability",
+      args: {
+        timeMin: "2099-06-22T00:00:00-03:00",
+        timeMax: "2099-06-24T00:00:00-03:00",
+      },
+    })) as ToolMessage;
+    expect(out.status).toBe("success");
+    expect(String(out.content).toLowerCase()).toContain("at most 24 hours");
   });
 });

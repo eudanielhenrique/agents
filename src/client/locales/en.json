@@ -175,6 +175,13 @@
     "actionError": "Action failed.",
     "approve": "Approve",
     "approved": "Suggestion approved and added.",
+    "edit": "Edit",
+    "editContent": "Content",
+    "editContentHint": "This text is stored in the knowledge base exactly as written. Make it a standalone statement, with no caveats about checking it.",
+    "edited": "Suggestion updated.",
+    "editError": "Could not save the edit.",
+    "editGone": "Someone else already reviewed this suggestion.",
+    "editTitle": "Title",
     "error": "Could not load the approval queue.",
     "fromConversation": "From the conversation: {{label}}",
     "fromPlayground": "From the playground of {{name}}",
@@ -225,6 +232,8 @@
     "accountsSaveError": "Could not update the accounts.",
     "adminToken": "Admin access token",
     "adminTokenHint": "Stored encrypted, never shown again.",
+    "autoSynced_one": "{{count}} new inbox synced from Chatwoot.",
+    "autoSynced_other": "{{count}} new inboxes synced from Chatwoot.",
     "baseUrl": "Base URL",
     "bindError": "Could not bind the inbox.",
     "bindLabel": "Answering agent",
@@ -362,6 +371,8 @@
       "done": "Follow-up sequence complete",
       "imminent": "any moment now",
       "imminentHint": "The estimated time has passed; it runs on a background worker, so the follow-up will be sent at any moment.",
+      "pausedAppointment": "Follow-up paused · appointment booked",
+      "pausedAppointmentHint": "The contact has an appointment booked, and this agent pauses re-engagement until it passes or is cancelled. The sequence resumes on its own after that.",
       "redirectHint": "This conversation's channel is managed by the redirect, so the standard follow-up does not run here. The redirect re-engages the lead across WhatsApp and the website chat.",
       "redirectManaged": "Re-engagement handled by Redirect",
       "redirectScheduled": "Redirect follow-up · {{stage}} · {{when}} · {{at}}",
@@ -539,6 +550,17 @@
   },
   "editor": {
     "always": "Always on",
+    "attributeContext": "Data in context",
+    "attributeContextContact": "Contact",
+    "attributeContextContactHint": "Attributes of the customer, kept across every conversation they have.",
+    "attributeContextConversation": "Conversation",
+    "attributeContextConversationHint": "Attributes of this conversation (reset with each new conversation).",
+    "attributeContextHint": "Chatwoot custom attributes whose CURRENT values the agent sees on every turn, so it knows what has already been collected and what is still missing. Pick only what matters to the conversation — everything selected goes into the prompt. The agent only writes them back when it has the \"Set attribute\" tool; without it they are read-only context.",
+    "attributeContextMultiAccount": "This agent serves more than one Chatwoot account, so the listed attributes mix accounts. Type each key exactly as it appears.",
+    "attributeContextPlaceholder": "Add an attribute…",
+    "attributeContextSearch": "Search attributes…",
+    "attributeContextTask": "Kanban card",
+    "attributeContextTaskHint": "Attributes of the card linked to this conversation, when there is one.",
     "attrInstructions": "Usage guidance",
     "attrInstructionsHint": "Optional. Explains which attribute to set on the conversation, the contact, or the kanban card, and when. The AI already sees the defined attributes; this adds your rules. Appended to the tool description.",
     "attrInstructionsPlaceholder": "e.g. Save the qualified budget on the contact as \"orcamento\"; set \"lead_stage\" on the card.",
@@ -748,6 +770,8 @@
       "actionTemplate": "Reply with a template message",
       "checkAdherence": "Adherence to the agent's instructions",
       "checkCompetitors": "Competitor mentions",
+      "checkRelevance": "The reply answers what the customer asked",
+      "checkRelevanceHint": "Sends the customer's message to the guardrails agent so it can compare. Off by default: after a short message like “sim”, a correct answer can look like an answer to another question, and the action above would replace it. Enabled alongside another check, it runs as a second call to the guardrails model: the output review then costs two calls per turn, made in parallel. When it trips, the action always uses the template message: there is no reply to rewrite, and letting the model invent one produces invented facts.",
       "checks": "Checks",
       "checkToxicity": "Toxicity / abuse",
       "checkUnsafe": "Unsafe content",
@@ -772,7 +796,8 @@
       "outputDesc": "Screen the agent's reply before it is sent.",
       "policy": "Policy",
       "policyDesc": "Competitor list and extra instructions used by the checks.",
-      "template": "Template message"
+      "template": "Template message",
+      "templateFallbackHint": "Sent whenever no replacement gets written: when the model returns none, and always when the relevance check is the one that tripped, since there is no reply to rewrite."
     },
     "handoffInstructions": "Transfer instructions",
     "handoffInstructionsHint": "Optional. Centralizes the transfer logic (when and to whom to escalate). Appended to the handoff tool description the AI reads.",
@@ -832,6 +857,7 @@
     "mode": "Mode",
     "modeHint": "A test agent stays silent in a conversation until the customer sends /teste; production answers normally.",
     "model": "Model",
+    "modelPickerProviderDefault": "Provider default",
     "modelPickerSearch": "Search models…",
     "modelRequired": "Pick a model for this provider before saving.",
     "modelSection": "Model",
@@ -839,6 +865,9 @@
     "modeProduction": "Production",
     "modeTest": "Test",
     "name": "Name",
+    "observability": "Logs",
+    "observabilityHint": "By default a tool line on the Logs page records the SHAPE of each argument and result ({ cpf: \"string(11)\" }): enough to see which arguments the agent sent, which it left out and whether a format is wrong, with no customer data. Turning the switch on records the values themselves, which is what answers which record it actually looked up, and keeps those values for the whole log retention window, including in every log export. Turn it on while investigating, off afterwards.",
+    "observabilityLogToolValues": "Log the values sent to tools",
     "openPlayground": "Test in playground",
     "overwriteAnyway": "Save anyway",
     "pixHint": "Used by both 'Send PIX key' and 'Request payment'. The AI never chooses or types this key — only what's configured here is ever sent.",
@@ -864,6 +893,9 @@
     "promptViewToggle": "Editor or preview",
     "provider": "Provider",
     "providerOpenAiCompatible": "OpenAI-compatible",
+    "reasoningEffort": "Reasoning effort",
+    "reasoningEffortDefault": "Provider default",
+    "reasoningEffortHint": "How much the model thinks before answering. Reasoning models only (o-series, gpt-5); more effort means slower, costlier answers.",
     "reload": "Reload",
     "roundingDate": "date",
     "roundingExact": "exact · changes every minute",
@@ -877,6 +909,10 @@
     "saveTools": "Save tools",
     "sectionsNav": "Sections",
     "selectProvider": "Select…",
+    "sendImage": "Sending images",
+    "sendImageHint": "Hosts the agent may fetch an image from when it uses the \"Send image\" tool. The agent chooses the URL, so this list is what decides where it can actually go: leave it empty and every attempt is refused. Output guardrails read text and never the picture itself, so this list is the only control over what an image may show. It has no effect unless the tool is granted on the Tools tab.",
+    "sendImageHosts": "Allowed hosts",
+    "sendImageHostsHint": "One per line, e.g. cdn.minhaloja.com.br. Start with \"*.\" to cover a domain and its subdomains (*.minhaloja.com.br). Paste a full URL and only its host is kept.",
     "split": "Reply in multiple messages",
     "splitEnabled": "Split replies into several messages with a typing delay",
     "splitHint": "Break long replies into smaller messages, with a typing pause between them (feels more human).",
@@ -1054,15 +1090,21 @@
       "addCalendarById": "Add by ID",
       "anyFolder": "Any folder (no scope)",
       "appointmentLength": "Appointment length",
+      "blockingCalendars": "Blocking calendars",
+      "blockingCalendarsHint": "Calendars the agent respects but never books into: every event on them blocks availability (holidays, closures, days off). The agent never sees their event details.",
+      "blockingCalendarsLimitWarning": "More than {{max}} blocking calendars are selected; availability checks will refuse until the list is reduced.",
+      "calendarManualAria": "Manual calendar ID {{index}}",
       "calendarPlaceholder": "Calendar ID (e.g. team@group.calendar.google.com)",
       "calendarPrimary": "(primary)",
       "calendars": "Allowed calendars",
       "calendarsError": "Could not list calendars. Check the credential's Calendar scope and try again.",
       "calendarsFromCredential": "Calendars from the connected account",
-      "calendarsHint": "The calendars the agent may read and write. Leave empty to use the connected account's primary calendar.",
+      "calendarsHint": "The calendars the agent may read and write. The calendar tools stay disabled until at least one is picked.",
       "calendarsPickCredential": "Choose a connected Google credential above to list its calendars.",
       "calendarTabs": "Calendar settings",
       "createCalendarLink": "Need a new calendar? Create one in Google Calendar",
+      "createMeetLink": "Create a Google Meet room for each appointment",
+      "createMeetLinkHint": "The agent then shares the Meet link with the customer. Turn it off if this calendar is only used to block time slots.",
       "environment": "Environment",
       "filterFolders": "Filter folders by name",
       "folder": "Folder",
@@ -1142,13 +1184,22 @@
     "saveError": "Could not save.",
     "sharedNotice": "This is a shared integration. Changes affect every agent that uses it.",
     "subtitle": "Activate ready-made integrations your agents can use.",
-    "tokenHint": "Copy this URL into the provider's webhook settings. It is shown only once.",
+    "tokenHint": "Copy this URL into the provider's webhook settings. You can read it again later by editing this integration.",
     "tokenTitle": "Inbound webhook URL",
     "toolsTitle": "What this integration can do",
     "type": "Integration",
     "webhook": {
       "explain": "When a charge is paid, Asaas calls this webhook and the agent is woken on the exact conversation that generated the charge. It then decides whether to message the customer (and may use its tools). You paste the webhook URL into the Asaas panel after saving.",
-      "title": "Payment webhook"
+      "rotate": "Generate new URL",
+      "rotateConfirm": "Generate",
+      "rotateError": "Could not generate.",
+      "rotateMessage": "The current URL stops working immediately. You must paste the new one into the provider's panel, or payment notifications stop arriving.",
+      "rotateTitle": "Generate a new URL",
+      "title": "Payment webhook",
+      "url": "Webhook URL",
+      "urlHint": "Paste this into the provider's panel.",
+      "urlMissing": "This integration was created before the URL could be shown again, so we no longer have it. Generate a new one and update it in the provider's panel.",
+      "urlUnreadable": "The stored URL can no longer be decrypted, which usually means the encryption key changed. Generate a new one and update it in the provider's panel."
     }
   },
   "invite": {
@@ -1212,7 +1263,8 @@
       "PENDING": "Pending",
       "PROCESSING": "Processing...",
       "READY": "{{n}} trechos",
-      "UNINDEXED": "Not indexed"
+      "UNINDEXED": "Not indexed",
+      "UNINDEXED_BLOCKED": "Not indexed: blocked"
     },
     "docTitle": "Title",
     "docTitleLabel": "Title",
@@ -1224,6 +1276,11 @@
     "docUpdateError": "Could not update the document.",
     "dropHint": "Arraste e solte um arquivo aqui, ou clique para escolher",
     "editTitle": "Edit knowledge base",
+    "embeddingBlock": {
+      "empty": "The embedding credential is empty. Fill it in, then index again.",
+      "notConfigured": "The embedding credential is not configured for this workspace. Set it under Components, then index again.",
+      "pending": "The embedding credential was never filled in. Fill it under Components, then index again."
+    },
     "emptyDesc": "Create one and ingest your FAQs, docs or product info.",
     "emptyTitle": "No knowledge bases yet",
     "fileHint": "PDF, DOCX, TXT, MD, CSV",
@@ -1235,8 +1292,6 @@
     "index": "Index",
     "indexAll": "Index all ({{n}})",
     "indexAllError": "Could not start indexing.",
-    "indexBlockedCredentialPending": "The embedding credential isn't filled yet. Fill its secret in the vault, then try again.",
-    "indexBlockedNotConfigured": "Embedding is not configured. Set the tenant's embedding (provider/model/credential) before indexing.",
     "indexing": "Indexing…",
     "loadError": "Could not load this base.",
     "name": "Name",
@@ -1487,6 +1542,10 @@
     "send_carousel_message": {
       "desc": "Send a horizontally-scrollable carousel of cards (image + text + choices) for products or plans.",
       "label": "Send carousel"
+    },
+    "send_image": {
+      "desc": "Deliver an image to the customer from its URL, limited to the hosts you allow.",
+      "label": "Send image"
     },
     "send_list_message": {
       "desc": "Send a scrollable menu of grouped options (more than 3 choices, or with descriptions).",
@@ -1796,7 +1855,7 @@
       "label": "Payment link"
     },
     "asaas_payment_status": {
-      "desc": "Check the status of an Asaas payment link.",
+      "desc": "Check the status of an Asaas charge (PIX) or payment link.",
       "label": "Check payment"
     },
     "calendar_cancel_event": {
@@ -1804,7 +1863,7 @@
       "label": "Cancel event"
     },
     "calendar_check_availability": {
-      "desc": "List bookable appointment times within a range, honoring the service hours and existing bookings.",
+      "desc": "List bookable appointment times within a range, honoring the service hours, existing bookings and any blocking calendars (holidays, closures).",
       "label": "Available times"
     },
     "calendar_confirm_appointment": {
@@ -1816,7 +1875,7 @@
       "label": "Create event"
     },
     "calendar_list_events": {
-      "desc": "List this customer's own appointments within a time range (each customer only sees their own).",
+      "desc": "List this customer's own appointments within a time range (each customer only sees their own; holidays and closures never appear here).",
       "label": "Customer appointments"
     },
     "calendar_update_event": {
@@ -1882,6 +1941,8 @@
     "emptyDesc": "Define a tool once, then grant it to the agents that need it.",
     "emptyTitle": "No HTTP tools yet",
     "enumValuePlaceholder": "value",
+    "expectedStatuses": "Statuses that mean 'no result'",
+    "expectedStatusesHint": "Comma-separated, e.g. 404. Use it when this API answers with an error status for an ordinary answer — a lookup that returns 404 for 'no record'. Those responses stop counting as integration failures, so they no longer raise alerts. The AI reads the same reply either way. Leave empty and every non-2xx is treated as a failure.",
     "formatJson": "Format",
     "headerKey": "Header",
     "headers": "Headers",

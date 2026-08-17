@@ -58,7 +58,7 @@ export const writeBody = t.Object({
   urlTemplate: t.Optional(
     t.String({
       description:
-        "Request URL template; {{param}} and {{secret}} placeholders are interpolated at call time.",
+        "Request URL template; {{param}}, {{context}} and {{secret}} placeholders are interpolated at call time. Single-brace {param} is accepted and normalized when it matches a declared input field or context variable.",
     }),
   ),
   allowedHosts: t.Optional(
@@ -75,7 +75,7 @@ export const writeBody = t.Object({
   inputSchema: t.Optional(
     t.Record(t.String(), t.Unknown(), {
       description:
-        "JSON Schema describing the parameters the agent must supply.",
+        'Input fields the agent supplies, as a compact map: {"field": {"type": "string"|"integer"|"number"|"boolean"|"enum"|"array"|"object", "required"?, "description"?, "enumValues"?, "itemType"?}}. Standard JSON Schema ({"properties", "required"}) is accepted and converted to this shape on write.',
     }),
   ),
   outputSchema: t.Optional(
@@ -92,7 +92,7 @@ export const writeBody = t.Object({
   body: t.Optional(
     t.Record(t.String(), t.Unknown(), {
       description:
-        "Request body template; {{param}} and {{secret}} placeholders are interpolated at call time.",
+        "Request body template; {{param}}, {{context}} and {{secret}} placeholders are interpolated at call time. Single-brace {param} is accepted and normalized when it matches a declared input field or context variable.",
     }),
   ),
   credentialRef: t.Optional(
@@ -108,6 +108,12 @@ export const writeBody = t.Object({
     t.Union([t.Literal("low"), t.Literal("medium"), t.Literal("high")], {
       description:
         "Risk tier; higher tiers can require an acknowledgement before the call runs.",
+    }),
+  ),
+  expectedStatuses: t.Optional(
+    t.Array(t.Integer(), {
+      description:
+        "HTTP statuses this tool treats as ordinary results instead of integration failures (e.g. [404] for a lookup where 'not found' is data). The model receives the same 'HTTP <status>' text either way; only the log level and the alert dispatch change. Empty (the default) keeps every non-2xx a failure. 2xx entries and values outside 100-599 are dropped on save.",
     }),
   ),
   ackEnabled: t.Optional(

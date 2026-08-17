@@ -23,11 +23,11 @@ services:
       # advisory lock still caps /setup at one admin). Set to `true` to require it.
       - SETUP_TOKEN_REQUIRED=${SETUP_TOKEN_REQUIRED:-false}
       - CDN_URL=${SERVICE_URL_AGENTS}
-      # NOTE: opt this onboarding / self-hosted deploy into MCP Dynamic Client Registration so the
-      # operator's AI agent (Claude Code / Codex) can `mcp login` to THIS instance's MCP — OAuth DCR
-      # mints the client and the metadata then publishes `registration_endpoint`. The app code default
-      # is OFF (closed/hardened, see docs/mcp.md); this agent-operated deploy turns it ON deliberately.
-      - MCP_DCR_ENABLED=true
+      # NOTE: MCP Dynamic Client Registration, so the operator's AI agent (Claude Code / Codex) can
+      # `mcp login` to THIS instance's MCP — DCR mints the client and the metadata then publishes
+      # `registration_endpoint`. Also the app default — pinned here so the stack works on an older
+      # image too, since without it both clients abort before any login screen (docs/mcp.md).
+      - MCP_DCR_ENABLED=${MCP_DCR_ENABLED:-true}
       # Optional: platform-wide Nuvemshop/Tiendanube Partner App credentials for the self-service
       # integration connect flow (see docs/integrations.md). Leave unset to disable; operators can
       # still connect a store manually via the vault.
@@ -41,9 +41,9 @@ services:
       # container's owner) runs migrations + bootstrap. The app role (SERVICE_USER_APPDBUSER,
       # created by db-bootstrap.ts) is NON-superuser/NON-bypassrls so RLS isolation holds — the
       # boot guard refuses to start the server on a privileged runtime role.
-      - 'MIGRATION_DATABASE_URL=postgres://${SERVICE_USER_DBUSER}:${SERVICE_PASSWORD_64_DBPASSWORD}@${DATABASE_HOST:-postgres}:${DATABASE_PORT:-5432}/${DATABASE_NAME:-secretaria_v4_db}'
-      - 'DATABASE_URL=postgres://${SERVICE_USER_APPDBUSER}:${SERVICE_PASSWORD_64_APPDBPASSWORD}@${DATABASE_HOST:-postgres}:${DATABASE_PORT:-5432}/${DATABASE_NAME:-secretaria_v4_db}'
-      - 'LANGGRAPH_DATABASE_URL=postgres://${SERVICE_USER_APPDBUSER}:${SERVICE_PASSWORD_64_APPDBPASSWORD}@${DATABASE_HOST:-postgres}:${DATABASE_PORT:-5432}/${DATABASE_NAME:-secretaria_v4_db}'
+      - 'MIGRATION_DATABASE_URL=postgres://${SERVICE_USER_DBUSER}:${SERVICE_PASSWORD_64_DBPASSWORD}@${DATABASE_HOST:-postgres}:${DATABASE_PORT:-5432}/${DATABASE_NAME:-fazerai_agents_db}'
+      - 'DATABASE_URL=postgres://${SERVICE_USER_APPDBUSER}:${SERVICE_PASSWORD_64_APPDBPASSWORD}@${DATABASE_HOST:-postgres}:${DATABASE_PORT:-5432}/${DATABASE_NAME:-fazerai_agents_db}'
+      - 'LANGGRAPH_DATABASE_URL=postgres://${SERVICE_USER_APPDBUSER}:${SERVICE_PASSWORD_64_APPDBPASSWORD}@${DATABASE_HOST:-postgres}:${DATABASE_PORT:-5432}/${DATABASE_NAME:-fazerai_agents_db}'
     # NOTE: the boot sequence (provision runtime role -> migrate as owner -> run the interpreted
     # server) is the image CMD in the Dockerfile. Do NOT override `command` here: it once drifted to
     # a stale `./server` (from the pre-interpreted `bun build --compile` era) and crash-looped on
@@ -67,7 +67,7 @@ services:
     volumes:
       - 'postgres:/var/lib/postgresql/data'
     environment:
-      - POSTGRES_DB=${DATABASE_NAME:-secretaria_v4_db}
+      - POSTGRES_DB=${DATABASE_NAME:-fazerai_agents_db}
       - POSTGRES_USER=${SERVICE_USER_DBUSER}
       - POSTGRES_PASSWORD=${SERVICE_PASSWORD_64_DBPASSWORD}
     healthcheck:

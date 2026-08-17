@@ -17,6 +17,7 @@ import { z } from "zod";
 import type { Prisma, PrismaClient } from "@/../generated/prisma/client";
 import basePrisma from "@/api/lib/prisma";
 import config from "@/config";
+import { normalizeExpectedStatuses } from "@/graph/tools/http-status";
 import { AppError, NotFoundError } from "@/lib/errors";
 import {
   hasSafeStdioCommandChars,
@@ -24,8 +25,10 @@ import {
   stdioCommandLauncher,
 } from "@/lib/mcp-launchers";
 import { runScopedOn, type ScopedDb, type TenantContext } from "@/lib/tenancy";
+import { normalizeSettingsForStorage } from "@/modules/images/settings";
 import { isKnownCatalogType } from "@/modules/integrations/catalog";
 import { assertNoSecrets } from "@/modules/n8n-export/n8n";
+import { normalizeToolShapes } from "@/modules/tool-definitions/normalize";
 import {
   createPendingVaultEntry,
   formatVaultRef,
@@ -34,7 +37,13 @@ import {
   VAULT_REF_PREFIX,
 } from "@/modules/vault/service";
 import { generateRouteToken } from "@/modules/webhooks/inbound/route-token";
-import { AGENT_SELECT, type AgentDto, requireTenant, toDto } from "./service";
+import {
+  AGENT_SELECT,
+  type AgentDto,
+  assertPromptSize,
+  requireTenant,
+  toDto,
+} from "./service";
 
 export const AGENT_EXPORT_KIND = "fazer-ai.agent";
 export const AGENT_EXPORT_VERSION = 1;
@@ -86,6 +95,9 @@ const exportedHttpToolSchema = z.object({
   ackEnabled: z.boolean(),
   ackMessage: z.string().nullable().optional(),
   credentialRef: z.string().nullable().optional(),
+  // Optional so bundles exported before issue #59 still import (defaults to [], which is today's
+  // "every non-2xx is a failure").
+  expectedStatuses: z.array(z.number()).optional(),
 });
 const exportedMcpServerSchema = z.object({
   name: z.string(),
@@ -151,7 +163,7 @@ export const agentExportSchema = z.object({
     .optional(),
   agent: z.object({
     name: z.string().min(1).max(200),
-    systemPrompt: z.string().max(50_000),
+    systemPrompt: z.string().max(config.agent.promptMaxChars),
     modelConfig: z.record(z.string(), z.unknown()),
     settings: z.record(z.string(), z.unknown()),
     transferWithSummary: z.boolean(),
@@ -572,6 +584,7 @@ export async function exportAgent(
           ackEnabled: r.ackEnabled,
           ackMessage: r.ackMessage,
           credentialRef: r.credentialRef,
+          expectedStatuses: r.expectedStatuses,
         })),
         mcpServers: mcpRows.map((r) => ({
           name: r.name,
@@ -740,6 +753,13 @@ export async function importAgent(
   base: PrismaClient = basePrisma,
 ): Promise<ImportAgentResult> {
   const tenantId = requireTenant(ctx);
+  // NOTE: size check BEFORE the schema parse — past the cap the operator gets the specific
+  // prompt-too-long error, not the generic invalid-payload one.
+  if (raw && typeof raw === "object") {
+    const sp = (raw as { agent?: { systemPrompt?: unknown } }).agent
+      ?.systemPrompt;
+    if (typeof sp === "string") assertPromptSize(sp);
+  }
   const parsed = agentExportSchema.safeParse(raw);
   if (!parsed.success) {
     throw new AppError(
@@ -883,7 +903,8 @@ export async function importAgent(
         name: exp.name,
         systemPrompt: exp.systemPrompt,
         modelConfig: modelConfig as Prisma.InputJsonValue,
-        settings: settings as Prisma.InputJsonValue,
+        settings: (normalizeSettingsForStorage(settings) ??
+          settings) as Prisma.InputJsonValue,
         transferWithSummary: exp.transferWithSummary,
         businessHoursId,
         followUpHoursId,
@@ -1042,6 +1063,16 @@ async function createMissingComponents(
       });
       continue;
     }
+    // NOTE: the import writes straight to the DB (not via the service), so canonicalize authoring
+    // shapes here too; a bundle exported from a pre-normalization instance may carry JSON-Schema
+    // inputSchema / single-brace placeholders.
+    const { shapes } = normalizeToolShapes({
+      urlTemplate: tdef.urlTemplate,
+      query: tdef.query ?? {},
+      headers: tdef.headers,
+      body: tdef.body,
+      inputSchema: tdef.inputSchema,
+    });
     await db.toolDefinition.create({
       data: {
         tenantId,
@@ -1050,14 +1081,17 @@ async function createMissingComponents(
         label: tdef.label ?? tdef.name,
         description: tdef.description ?? null,
         method: tdef.method,
-        urlTemplate: tdef.urlTemplate,
+        urlTemplate: (shapes.urlTemplate ?? tdef.urlTemplate) as string,
         allowedHosts: tdef.allowedHosts,
-        headers: tdef.headers as Prisma.InputJsonValue,
-        inputSchema: tdef.inputSchema as Prisma.InputJsonValue,
+        headers: shapes.headers as Prisma.InputJsonValue,
+        inputSchema: shapes.inputSchema as Prisma.InputJsonValue,
         outputSchema: tdef.outputSchema as Prisma.InputJsonValue,
-        query: (tdef.query ?? {}) as Prisma.InputJsonValue,
-        body: tdef.body as Prisma.InputJsonValue,
+        query: shapes.query as Prisma.InputJsonValue,
+        body: shapes.body as Prisma.InputJsonValue,
         riskTier: tdef.riskTier,
+        // Normalized like the shapes above, and for the same reason: the import writes straight to
+        // the DB, so a hand-edited bundle would otherwise store a list the service would refuse.
+        expectedStatuses: normalizeExpectedStatuses(tdef.expectedStatuses),
         ackEnabled: tdef.ackEnabled,
         ackMessage: tdef.ackMessage ?? null,
         credentialRef: resolveCredName(tdef.credentialRef),

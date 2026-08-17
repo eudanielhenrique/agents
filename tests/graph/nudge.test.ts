@@ -8,12 +8,14 @@ import { contactInboxThreadId } from "@/graph/checkpointer";
 import {
   FOLLOWUP_SKIP_SENTINEL,
   isNudgeSilent,
+  OUTSIDE_WINDOW_NOTE_PREFIX,
   parseThreadId,
   renderNudge,
   runAgentNudge,
 } from "@/graph/nudge";
 import type { ChatwootClient } from "@/modules/chatwoot/client";
 import { seedChatwootInstance } from "../utils/chatwoot";
+import { EmptyThenReplyModel } from "../utils/scripted-models";
 
 describe("renderNudge (prompt-injection boundary)", () => {
   test("directive comes first and is authoritative", () => {
@@ -323,6 +325,10 @@ describe.skipIf(!dbUp)("runAgentNudge", () => {
       tenantId,
       threadId: `${tenantId}:${instanceId}:903`,
       nudge: { source: "ASAAS", status: "paid" },
+      // NOTE: resolve MUST be skipped on noted-window (nothing reached the customer and the
+      // sequence ends here — auto-resolving would close the conversation unanswered); labels
+      // still apply so the operator can triage the fenced conversations.
+      postActions: { assignLabels: ["follow-up"], resolve: true },
       base: appDb,
       deps: {
         makeModel: () =>
@@ -332,9 +338,13 @@ describe.skipIf(!dbUp)("runAgentNudge", () => {
         persistUsage: async () => {},
       },
     });
-    expect(outcome).toBe("noted");
+    expect(outcome).toBe("noted-window");
     expect(s.messages).toEqual([]);
-    expect(s.notes).toEqual([[903, "Pagamento confirmado!"]]);
+    expect(s.notes).toEqual([
+      [903, `${OUTSIDE_WINDOW_NOTE_PREFIX}Pagamento confirmado!`],
+    ]);
+    expect(s.resolved).toEqual([]);
+    expect(s.labelSets).toEqual([["follow-up"]]);
   });
 
   test("human-handling conversation → private note, never a customer message", async () => {
@@ -526,5 +536,40 @@ describe.skipIf(!dbUp)("runAgentNudge", () => {
     expect(outcome).toBe("no-conversation");
     expect(s.messages).toEqual([]);
     expect(s.notes).toEqual([]);
+  });
+
+  // A proactive send that only worked on the second attempt must not read like a clean turn: this
+  // path can page an alert channel, so a recovered provider fault has to leave its warn behind.
+  test("a recovered empty completion leaves a warn on the nudge's trail", async () => {
+    await seedConv(913, null, new Date());
+    const s = stub();
+    const outcome = await runAgentNudge({
+      tenantId,
+      threadId: `${tenantId}:${instanceId}:913`,
+      nudge: { source: "followup", kind: "inactivity", step: 1 },
+      base: appDb,
+      deps: {
+        makeModel: () => new EmptyThenReplyModel("Tudo certo?", 1),
+        makeClient: s.makeClient,
+        checkpointer: new MemorySaver(),
+        persistUsage: async () => {},
+      },
+    });
+    expect(outcome).toBe("messaged");
+    // emitFlowEvent is fire-and-forget, so poll for the row instead of racing it.
+    let logged = false;
+    for (let i = 0; i < 30 && !logged; i++) {
+      const rows = await suDb.executionLog.findMany({
+        where: { tenantId, stage: "generate", level: "warn" },
+        select: { detail: true },
+      });
+      logged = rows.some(
+        (r) =>
+          (r.detail as Record<string, unknown> | null)?.retriedEmptyResponse ===
+          1,
+      );
+      if (!logged) await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(logged).toBe(true);
   });
 });

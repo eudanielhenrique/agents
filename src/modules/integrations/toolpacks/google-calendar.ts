@@ -1,6 +1,7 @@
-import { type StructuredToolInterface, tool } from "@langchain/core/tools";
+import type { StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 import logger from "@/api/lib/logger";
+import { failableTool, toolFailure } from "@/graph/tools/failure";
 import { assertSafeOutboundUrl } from "@/lib/ssrf";
 import { xmlAttr } from "@/lib/xml";
 import { readAppointmentReminderConfig } from "@/modules/appointments/settings";
@@ -32,7 +33,8 @@ import {
 // Security invariants (mirror asaas.ts):
 //   - the set of operable calendars (`calendarIds`) + `timeZone` are bound to the INSTANCE CONFIG; a
 //     tool's optional `calendarId` arg is validated against the allowlist, fail-closed (with a single
-//     allowed calendar it is auto-selected; with several the model picks by name or id IN the set);
+//     allowed calendar the arg is not even exposed and that calendar is used; with several the model
+//     picks by name or id IN the set);
 //   - the per-customer stamp is bound to ctx.contactDbId, never a tool arg;
 //   - the bearer token flows ONLY into the Authorization header;
 //   - the origin is a fixed constant (never interpolated); SSRF-guarded anyway;
@@ -43,6 +45,10 @@ const TIMEOUT_MS = 12_000;
 // Generous bound: a list of 25 verbose event objects parses; a runaway response is still capped.
 const MAX_RESPONSE_CHARS = 100_000;
 const MAX_LIST_RESULTS = 25;
+// Blocking-calendar fan-out bound: each configured blocking calendar costs one events.list request
+// per availability call, so a runaway list would multiply latency + quota. Fail-closed above the
+// cap (refuse, never silently check a subset).
+const MAX_BLOCKING_CALENDARS = 10;
 
 // Brazilian clinics are the default audience; absent an explicit config timeZone, anchor every timed
 // event and freeBusy query to São Paulo so the agent's "14:00" is unambiguous.
@@ -50,10 +56,18 @@ const DEFAULT_TIME_ZONE = "America/Sao_Paulo";
 
 // The private-event key carrying the owning contact's stamp. Keys in extendedProperties.private are
 // visible/queryable ONLY by our OAuth app, never by other apps or the customer.
+//
+// FROZEN through the brand rename, deliberately. These two keys are stamped on REAL events living
+// in customers' calendars, and the list fence filters server-side by
+// `privateExtendedProperty=secv4Contact=<stamp>` — Google takes ONE such filter per request, so
+// accepting a second key name would mean two listings plus a merge on every read, forever, or a
+// backfill we cannot run on self-hosted instances. They are also the only pre-rename identifiers
+// no human ever sees. Do NOT rename them outside the 2.0 cut.
 const SECV4_CONTACT_KEY = "secv4Contact";
 
 // The private-event key recording the attendance-confirmation timestamp (set by
-// calendar_confirm_appointment, injected from code, never surfaced to the model).
+// calendar_confirm_appointment, injected from code, never surfaced to the model). Frozen for the
+// same reason as SECV4_CONTACT_KEY above.
 const SECV4_CONFIRMED_KEY = "secv4Confirmed";
 // Title prefix that marks a confirmed appointment (applied idempotently).
 const CONFIRMED_PREFIX = "[CONFIRMADO] ";
@@ -72,6 +86,29 @@ function resolveAllowedCalendarIds(config: Record<string, unknown>): string[] {
     if (ids.length > 0) return Array.from(new Set(ids));
   }
   return [];
+}
+
+// Calendars the agent must RESPECT but never operates on (holidays, closures, staff time off),
+// designated by the operator in the instance config. Availability treats EVERY event on them as
+// busy. De-duplicated; the active booking calendar is filtered out at the call site (its bookings
+// already count via freeBusy, and "blocking" semantics on the booking calendar would also turn its
+// transparent events into blocks).
+function resolveBlockingCalendarIds(config: Record<string, unknown>): string[] {
+  const raw = config.blockingCalendarIds;
+  if (!Array.isArray(raw)) return [];
+  const ids = raw
+    .filter((v): v is string => typeof v === "string")
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
+  return Array.from(new Set(ids));
+}
+
+// NOTE: whether calendar_create_event asks Google for a Meet room. ON by default: an agent that books a
+// "call" must hand the customer a real meeting room, not the calendar page (htmlLink). Operators who
+// use the calendar purely as a busy-block turn it off in the integration config. When the connected
+// account cannot create Meet rooms, Google keeps the event and just omits the conference (no error).
+function resolveCreateMeetLink(config: Record<string, unknown>): boolean {
+  return config.createMeetLink !== false;
 }
 
 // Friendly labels (calendar id → human name, e.g. "Dr. Ana"), captured when the operator picks
@@ -101,19 +138,45 @@ function listAllowed(
   return `Allowed calendars: ${list} (pass calendarId by name or id).`;
 }
 
-// The allowed calendars as an XML block, appended at the END of a tool's description ONLY when several
-// are allowed (with a single calendar it is auto-selected and never needs to be named). Each <calendar>
-// carries the friendly name (when known) and/or the raw id — both are valid values for the calendarId
-// arg. Empty ⇒ "" (no block).
-function allowedCalendarsXml(
+// The calendar the model cannot choose: with EXACTLY ONE allowed calendar the binding is pinned, so
+// there is nothing to pick — the tools drop the calendarId arg (calendarArgSchema) and the context
+// block names the calendar instead of enumerating options (calendarContextXml). Null when the operator
+// allowed none (the tools refuse at invoke time) or several (the model picks, fenced by pickCalendarId).
+function pinnedCalendarId(allowed: string[]): string | null {
+  return allowed.length === 1 ? (allowed[0] as string) : null;
+}
+
+// The calendars as an XML block, appended at the END of a tool's description. Pinned ⇒ the single
+// <active_calendar> the tools operate on, so the agent can NAME it to the customer without a
+// calendarId arg to pass. Several ⇒ the <allowed_calendars> the model picks from, each <calendar>
+// carrying the friendly name (when known) and/or the raw id — both valid values for the arg. None ⇒
+// "" (no block).
+function calendarContextXml(
   allowed: string[],
   labels: Record<string, string>,
 ): string {
-  if (allowed.length <= 1) return "";
+  const pinned = pinnedCalendarId(allowed);
+  if (pinned) {
+    return `<active_calendar${xmlAttr("name", labels[pinned])}${xmlAttr("id", pinned)}/>`;
+  }
+  if (allowed.length === 0) return "";
   const els = allowed.map(
     (id) => `  <calendar${xmlAttr("name", labels[id])}${xmlAttr("id", id)}/>`,
   );
   return `<allowed_calendars>\n${els.join("\n")}\n</allowed_calendars>`;
+}
+
+// A tool's schema as the MODEL sees it. Pinned ⇒ calendarId is REMOVED: an optional arg offered with
+// no valid value in sight is an invitation to invent one (a support report had an agent passing the
+// operator's own wording for the integration, which never reaches the runtime, and the tool refusing
+// on the one calendar it could have used). Zod strips a residual key from an older turn before the
+// body runs, so the pinned calendar is used either way. Several/none ⇒ the arg stays and
+// pickCalendarId fences it.
+function calendarArgSchema(
+  schema: z.ZodObject<z.ZodRawShape>,
+  allowed: string[],
+): z.ZodTypeAny {
+  return pinnedCalendarId(allowed) ? schema.omit({ calendarId: true }) : schema;
 }
 
 // The configured appointment length as an XML element for calendar_check_availability: preset="true"
@@ -268,6 +331,79 @@ function toEventTime(value: string, timeZone: string): Record<string, string> {
   return { dateTime: v, timeZone };
 }
 
+// PATCH merges what we send, so a patch carrying only `dateTime` leaves the event's existing `date`
+// in place — and Google rejects an event holding both (HTTP 400), which makes every all-day ⇄ timed
+// conversion fail. Sending the opposite field as null clears it, so the patch replaces the time
+// representation instead of mixing the two.
+function toEventTimePatch(
+  value: string,
+  timeZone: string,
+): Record<string, string | null> {
+  const t = toEventTime(value, timeZone);
+  return "date" in t ? { ...t, dateTime: null } : { ...t, date: null };
+}
+
+// The timezone's UTC offset (ms) at an instant, via Intl (Temporal is unavailable in Bun).
+function tzOffsetMs(at: number, tz: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(at));
+  const get = (type: string) =>
+    Number(parts.find((p) => p.type === type)?.value ?? "0");
+  const asUtc = Date.UTC(
+    get("year"),
+    get("month") - 1,
+    get("day"),
+    get("hour") % 24,
+    get("minute"),
+    get("second"),
+  );
+  return asUtc - at;
+}
+
+// The UTC instant of local midnight for a YYYY-MM-DD in an IANA timezone (DST-correct: one
+// refinement pass covers an offset shift between the UTC guess and the target instant).
+function zonedMidnightMs(date: string, tz: string): number {
+  const utcGuess = Date.parse(`${date}T00:00:00Z`);
+  const first = utcGuess - tzOffsetMs(utcGuess, tz);
+  return utcGuess - tzOffsetMs(first, tz);
+}
+
+// A blocking-calendar event as a busy window. Timed events parse as-is; an all-day `date` widens to
+// local midnight in the integration timezone (Google's all-day end.date is already exclusive).
+// Unparseable shapes → null (skipped defensively).
+function blockingBusyWindow(
+  ev: Record<string, unknown>,
+  timeZone: string,
+): { start: string; end: string } | null {
+  const point = (t: unknown): number | null => {
+    if (!t || typeof t !== "object") return null;
+    const o = t as Record<string, unknown>;
+    if (typeof o.dateTime === "string") {
+      const ms = Date.parse(o.dateTime);
+      return Number.isNaN(ms) ? null : ms;
+    }
+    if (typeof o.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(o.date)) {
+      return zonedMidnightMs(o.date, timeZone);
+    }
+    return null;
+  };
+  const start = point(ev.start);
+  const end = point(ev.end);
+  if (start === null || end === null || end <= start) return null;
+  return {
+    start: new Date(start).toISOString(),
+    end: new Date(end).toISOString(),
+  };
+}
+
 // Flattens a Calendar start/end object to a single string for the model (dateTime or all-day date).
 function flattenTime(t: unknown): string | null {
   if (!t || typeof t !== "object") return null;
@@ -338,8 +474,12 @@ const NO_CONTACT =
 const FOREIGN_EVENT =
   "That appointment is not associated with this customer, so it cannot be read or changed here.";
 
+// NOTE: zod-optional but never optional in practice: the arg is only ever EXPOSED when the
+// integration allows several calendars (calendarArgSchema), and then one of them must be named or
+// pickCalendarId refuses. The trailing sentence is for the operator reading the arg list in the
+// console, which is per-catalog and therefore always shows this field.
 const CALENDAR_ID_DESC =
-  "Which calendar to act on. Optional; required only when the integration allows several calendars. Pass an allowed calendar's name or id.";
+  "Which calendar to act on: name or id of one of the calendars in `<allowed_calendars>`. This arg only appears when the integration allows several calendars; with a single one it is used automatically.";
 
 function projectEvent(ev: Record<string, unknown>) {
   return {
@@ -348,6 +488,9 @@ function projectEvent(ev: Record<string, unknown>) {
     start: flattenTime(ev.start),
     end: flattenTime(ev.end),
     htmlLink: typeof ev.htmlLink === "string" ? ev.htmlLink : undefined,
+    // NOTE: the Meet room (hangoutLink) — THE link to hand the customer; htmlLink is only the event's
+    // calendar page, useless to a lead without access to the calendar.
+    meetLink: typeof ev.hangoutLink === "string" ? ev.hangoutLink : undefined,
   };
 }
 
@@ -473,7 +616,7 @@ function buildListEventsTool(
 ): StructuredToolInterface {
   const allowed = resolveAllowedCalendarIds(sel.config);
   const labels = resolveCalendarLabels(sel.config);
-  return tool(
+  return failableTool(
     async (input: {
       timeMin?: string;
       timeMax?: string;
@@ -483,7 +626,7 @@ function buildListEventsTool(
       const stamp = contactStamp(ctx);
       if (!stamp) return NO_CONTACT;
       const token = await resolveToken(sel, ctx);
-      if (!token) return NOT_CONNECTED;
+      if (!token) return toolFailure(NOT_CONNECTED);
       const pick = pickCalendarId(allowed, labels, input.calendarId);
       if ("error" in pick) return pick.error;
       const calendarId = pick.id;
@@ -507,10 +650,12 @@ function buildListEventsTool(
         );
       } catch (err) {
         logger.warn({ err }, "gcal: list events request failed");
-        return "Failed to reach Google Calendar. Try again shortly.";
+        return toolFailure(
+          "Failed to reach Google Calendar. Try again shortly.",
+        );
       }
       if (res.status < 200 || res.status >= 300) {
-        return `Google Calendar returned HTTP ${res.status}.`;
+        return toolFailure(`Google Calendar returned HTTP ${res.status}.`);
       }
       const data = (res.json ?? {}) as Record<string, unknown>;
       const items = Array.isArray(data.items) ? data.items : [];
@@ -533,10 +678,10 @@ function buildListEventsTool(
     {
       name: "calendar_list_events",
       description: withCalendarContext(
-        `List THIS customer's own appointments on the calendar in a time range (each customer only ever sees their own). Returns each appointment's id, summary, start and end. Use ISO 8601 timestamps (with offset) for the range.`,
-        allowedCalendarsXml(allowed, labels),
+        `List THIS customer's own appointments on the calendar in a time range (each customer only ever sees their own). Holidays, closures, staff events and other customers' bookings are NEVER visible here, so an empty result does NOT mean the calendar is free; use calendar_check_availability to know what is actually bookable. Returns each appointment's id, summary, start and end. Use ISO 8601 timestamps (with offset) for the range.`,
+        calendarContextXml(allowed, labels),
       ),
-      schema: LIST_EVENTS_SCHEMA,
+      schema: calendarArgSchema(LIST_EVENTS_SCHEMA, allowed),
     },
   );
 }
@@ -550,7 +695,8 @@ function buildCheckAvailabilityTool(
   const timeZone = resolveTimeZone(sel.config);
   const businessHoursId = resolveBusinessHoursId(sel.config);
   const minLeadMinutes = resolveMinLead(sel.config);
-  return tool(
+  const blockingIds = resolveBlockingCalendarIds(sel.config);
+  return failableTool(
     async (input: {
       timeMin: string;
       timeMax: string;
@@ -567,7 +713,7 @@ function buildCheckAvailabilityTool(
         return "Please search at most 24 hours at a time. Narrow the range to a single day and call again for other days.";
       }
       const token = await resolveToken(sel, ctx);
-      if (!token) return NOT_CONNECTED;
+      if (!token) return toolFailure(NOT_CONNECTED);
       const pick = pickCalendarId(allowed, labels, input.calendarId);
       if ("error" in pick) return pick.error;
       const calendarId = pick.id;
@@ -586,10 +732,12 @@ function buildCheckAvailabilityTool(
         );
       } catch (err) {
         logger.warn({ err }, "gcal: freeBusy request failed");
-        return "Failed to reach Google Calendar. Try again shortly.";
+        return toolFailure(
+          "Failed to reach Google Calendar. Try again shortly.",
+        );
       }
       if (res.status < 200 || res.status >= 300) {
-        return `Google Calendar returned HTTP ${res.status}.`;
+        return toolFailure(`Google Calendar returned HTTP ${res.status}.`);
       }
       const data = (res.json ?? {}) as Record<string, unknown>;
       const calendars = (data.calendars ?? {}) as Record<string, unknown>;
@@ -598,6 +746,63 @@ function buildCheckAvailabilityTool(
         .map((b) => (b ?? {}) as Record<string, unknown>)
         .filter((b) => typeof b.start === "string" && typeof b.end === "string")
         .map((b) => ({ start: b.start as string, end: b.end as string }));
+      // Blocking calendars (holidays, closures) count as busy too, read via events.list, NOT
+      // freeBusy: all-day events (the typical holiday shape) default to transparency "transparent"
+      // ("Free") and freeBusy silently ignores them, which is exactly the calendar the operator
+      // expects to block. Only start/end are requested (no titles or attendees reach the model).
+      // Fail-closed: a blocking calendar we cannot read could be hiding a closure, so refusing
+      // beats offering a slot the operator explicitly blocked.
+      const blocking = blockingIds.filter((id) => id !== calendarId);
+      if (blocking.length > MAX_BLOCKING_CALENDARS) {
+        return `Too many blocking calendars are configured (${blocking.length}; the limit is ${MAX_BLOCKING_CALENDARS}), so availability cannot be verified. Reduce the blocking calendars in the integration settings.`;
+      }
+      if (blocking.length > 0) {
+        const evParams = new URLSearchParams({
+          singleEvents: "true",
+          timeMin: input.timeMin,
+          timeMax: input.timeMax,
+          maxResults: "50",
+          fields: "items(start,end),nextPageToken",
+        });
+        let blockingRes: GcalResponse[];
+        try {
+          blockingRes = await Promise.all(
+            blocking.map((id) =>
+              gcalFetch(
+                `/calendars/${encodeURIComponent(id)}/events?${evParams.toString()}`,
+                { method: "GET", token },
+                ctx,
+              ),
+            ),
+          );
+        } catch (err) {
+          logger.warn({ err }, "gcal: blocking calendars request failed");
+          return toolFailure(
+            "Failed to read a blocking calendar (holidays/closures), so availability cannot be verified right now. Try again shortly.",
+          );
+        }
+        for (const r of blockingRes) {
+          if (r.status < 200 || r.status >= 300) {
+            return toolFailure(
+              `Google Calendar returned HTTP ${r.status} for a blocking calendar, so availability cannot be verified right now.`,
+            );
+          }
+          const evData = (r.json ?? {}) as Record<string, unknown>;
+          // A nextPageToken means the window holds more events than the cap covers; treating the
+          // partial page as complete could offer a slot the operator explicitly blocked.
+          if (typeof evData.nextPageToken === "string") {
+            return "A blocking calendar has more events in this range than can be checked at once, so availability cannot be verified right now. Try a narrower range.";
+          }
+          const items = Array.isArray(evData.items) ? evData.items : [];
+          for (const ev of items) {
+            const w = blockingBusyWindow(
+              (ev ?? {}) as Record<string, unknown>,
+              timeZone,
+            );
+            if (w) busy.push(w);
+          }
+        }
+      }
       // The service hours bounding bookable slots: the integration's chosen BusinessHours (windows +
       // its own timezone). Unset/missing ⇒ no time-of-day filter ("always on"); we then fall back to
       // the integration's display timezone for the slot labels.
@@ -628,11 +833,11 @@ function buildCheckAvailabilityTool(
     {
       name: "calendar_check_availability",
       description: withCalendarContext(
-        `Return ALL bookable appointment start times within a range, already honoring the service hours and existing bookings (no appointment details are exposed). Each slot has start, end and a human-readable label. Offer these to the customer and confirm one before creating the appointment. Pass ISO 8601 timestamps for the range, and search AT MOST 24 hours per call (one day at a time — call again for other days). The configured appointment length is shown in \`<slot_duration>\` below — when preset="false", choose it yourself per request and pass slotDurationMinutes (e.g. 30 for a standard appointment, 60 for a longer one); when preset="true", pass slotDurationMinutes only to override it.`,
+        `Return ALL bookable appointment start times within a range, already honoring the service hours, existing bookings and any operator-designated blocking calendars such as holidays or closures (no appointment details are exposed). Each slot has start, end and a human-readable label. Offer these to the customer and confirm one before creating the appointment. Pass ISO 8601 timestamps for the range, and search AT MOST 24 hours per call (one day at a time — call again for other days). The configured appointment length is shown in \`<slot_duration>\` below — when preset="false", choose it yourself per request and pass slotDurationMinutes (e.g. 30 for a standard appointment, 60 for a longer one); when preset="true", pass slotDurationMinutes only to override it.`,
         slotDurationXml(sel.config),
-        allowedCalendarsXml(allowed, labels),
+        calendarContextXml(allowed, labels),
       ),
-      schema: CHECK_AVAILABILITY_SCHEMA,
+      schema: calendarArgSchema(CHECK_AVAILABILITY_SCHEMA, allowed),
     },
   );
 }
@@ -644,7 +849,8 @@ function buildCreateEventTool(
   const allowed = resolveAllowedCalendarIds(sel.config);
   const labels = resolveCalendarLabels(sel.config);
   const timeZone = resolveTimeZone(sel.config);
-  return tool(
+  const meetEnabled = resolveCreateMeetLink(sel.config);
+  return failableTool(
     async (input: {
       summary: string;
       start: string;
@@ -655,7 +861,7 @@ function buildCreateEventTool(
       const stamp = contactStamp(ctx);
       if (!stamp) return NO_CONTACT;
       const token = await resolveToken(sel, ctx);
-      if (!token) return NOT_CONNECTED;
+      if (!token) return toolFailure(NOT_CONNECTED);
       const pick = pickCalendarId(allowed, labels, input.calendarId);
       if ("error" in pick) return pick.error;
       const calendarId = pick.id;
@@ -666,24 +872,65 @@ function buildCreateEventTool(
         ...(input.description ? { description: input.description } : {}),
         // Owner stamp injected from context, never from the model: locks this appointment to the contact.
         extendedProperties: { private: { [SECV4_CONTACT_KEY]: stamp } },
+        // NOTE: a Meet room for the appointment. requestId MUST be unique per event: Google returns the
+        // SAME room for a reused id, which would put different leads in one meeting.
+        ...(meetEnabled
+          ? {
+              conferenceData: {
+                createRequest: {
+                  requestId: crypto.randomUUID(),
+                  conferenceSolutionKey: { type: "hangoutsMeet" },
+                },
+              },
+            }
+          : {}),
       };
       let res: GcalResponse;
       try {
         res = await gcalFetch(
-          `/calendars/${encodeURIComponent(calendarId)}/events`,
+          // NOTE: without conferenceDataVersion=1 the API IGNORES conferenceData in silence — no error,
+          // no room. Easy to lose in a refactor; pinned by tests.
+          `/calendars/${encodeURIComponent(calendarId)}/events${meetEnabled ? "?conferenceDataVersion=1" : ""}`,
           { method: "POST", token, body },
           ctx,
         );
       } catch (err) {
         logger.warn({ err }, "gcal: create event request failed");
-        return "Failed to reach Google Calendar. Try again shortly.";
+        return toolFailure(
+          "Failed to reach Google Calendar. Try again shortly.",
+        );
       }
       if (res.status < 200 || res.status >= 300) {
-        return `Google Calendar rejected the event (HTTP ${res.status}).`;
+        return toolFailure(
+          `Google Calendar rejected the event (HTTP ${res.status}).`,
+        );
       }
-      const data = (res.json ?? {}) as Record<string, unknown>;
+      let data = (res.json ?? {}) as Record<string, unknown>;
       if (typeof data.id !== "string") {
-        return "Google Calendar returned an unexpected response.";
+        return toolFailure("Google Calendar returned an unexpected response.");
+      }
+      const eventId = data.id;
+      // NOTE: room creation is usually synchronous, but the API may answer with the createRequest still
+      // pending and no hangoutLink; one cheap re-read closes that gap (no polling — if it is STILL
+      // pending, the reply simply carries no meetLink and the event stands).
+      if (meetEnabled && typeof data.hangoutLink !== "string") {
+        try {
+          const re = await gcalFetch(
+            `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
+            { method: "GET", token },
+            ctx,
+          );
+          const rec = (re.json ?? {}) as Record<string, unknown>;
+          if (
+            re.status >= 200 &&
+            re.status < 300 &&
+            typeof rec.hangoutLink === "string"
+          ) {
+            data = rec;
+          }
+        } catch (err) {
+          logger.warn({ err }, "gcal: meet-link re-read failed");
+        }
       }
       // Arm deterministic reminders for the new appointment (best-effort; no-op when the Calendar
       // integration has reminders disabled / on the playground). The policy (offsets/confirmation) is
@@ -692,12 +939,15 @@ function buildCreateEventTool(
       const apptCfg = readAppointmentReminderConfig(sel.config);
       if (apptCfg.enabled && ctx.scheduleAppointmentReminders && startISO) {
         await ctx.scheduleAppointmentReminders({
-          eventId: data.id,
+          eventId,
           calendarId,
           startISO,
           credentialRef: sel.credentialRef,
           offsetsHours: apptCfg.offsetsHours,
           askConfirmationOnLast: apptCfg.askConfirmationOnLast,
+          summary:
+            typeof data.summary === "string" ? data.summary : input.summary,
+          calendarLabel: labels[calendarId] ?? null,
         });
       }
       return JSON.stringify(projectEvent(data));
@@ -705,10 +955,10 @@ function buildCreateEventTool(
     {
       name: "calendar_create_event",
       description: withCalendarContext(
-        `Create an appointment for THIS customer on the calendar (it is automatically tagged to this customer, so only they can later see or change it). Provide a summary plus start and end. Use ISO 8601 with an offset for timed events (e.g. 2026-06-20T14:00:00-03:00) or a bare date (2026-06-20) for an all-day event. Returns the created appointment's id and link.`,
-        allowedCalendarsXml(allowed, labels),
+        `Create an appointment for THIS customer on the calendar (it is automatically tagged to this customer, so only they can later see or change it). Provide a summary plus start and end. Use ISO 8601 with an offset for timed events (e.g. 2026-06-20T14:00:00-03:00) or a bare date (2026-06-20) for an all-day event. Returns the created appointment's id and links${meetEnabled ? "; share meetLink (the Google Meet room) with the customer — htmlLink is only the calendar page" : ""}.`,
+        calendarContextXml(allowed, labels),
       ),
-      schema: CREATE_EVENT_SCHEMA,
+      schema: calendarArgSchema(CREATE_EVENT_SCHEMA, allowed),
     },
   );
 }
@@ -720,7 +970,7 @@ function buildUpdateEventTool(
   const allowed = resolveAllowedCalendarIds(sel.config);
   const labels = resolveCalendarLabels(sel.config);
   const timeZone = resolveTimeZone(sel.config);
-  return tool(
+  return failableTool(
     async (input: {
       eventId: string;
       summary?: string;
@@ -732,7 +982,7 @@ function buildUpdateEventTool(
       const stamp = contactStamp(ctx);
       if (!stamp) return NO_CONTACT;
       const token = await resolveToken(sel, ctx);
-      if (!token) return NOT_CONNECTED;
+      if (!token) return toolFailure(NOT_CONNECTED);
       const pick = pickCalendarId(allowed, labels, input.calendarId);
       if ("error" in pick) return pick.error;
       const calendarId = pick.id;
@@ -740,8 +990,9 @@ function buildUpdateEventTool(
       if (input.summary !== undefined) body.summary = input.summary;
       if (input.description !== undefined) body.description = input.description;
       if (input.start !== undefined)
-        body.start = toEventTime(input.start, timeZone);
-      if (input.end !== undefined) body.end = toEventTime(input.end, timeZone);
+        body.start = toEventTimePatch(input.start, timeZone);
+      if (input.end !== undefined)
+        body.end = toEventTimePatch(input.end, timeZone);
       if (Object.keys(body).length === 0) {
         return "No fields provided. Set at least one of summary, start, end or description.";
       }
@@ -756,11 +1007,13 @@ function buildUpdateEventTool(
         );
       } catch (err) {
         logger.warn({ err }, "gcal: update ownership check failed");
-        return "Failed to reach Google Calendar. Try again shortly.";
+        return toolFailure(
+          "Failed to reach Google Calendar. Try again shortly.",
+        );
       }
       if (owner.status === 404) return FOREIGN_EVENT;
       if (owner.status < 200 || owner.status >= 300) {
-        return `Google Calendar returned HTTP ${owner.status}.`;
+        return toolFailure(`Google Calendar returned HTTP ${owner.status}.`);
       }
       const ownerEv = (owner.json ?? {}) as Record<string, unknown>;
       if (eventStamp(ownerEv) !== stamp) return FOREIGN_EVENT;
@@ -773,10 +1026,14 @@ function buildUpdateEventTool(
         );
       } catch (err) {
         logger.warn({ err }, "gcal: update event request failed");
-        return "Failed to reach Google Calendar. Try again shortly.";
+        return toolFailure(
+          "Failed to reach Google Calendar. Try again shortly.",
+        );
       }
       if (res.status < 200 || res.status >= 300) {
-        return `Google Calendar rejected the update (HTTP ${res.status}).`;
+        return toolFailure(
+          `Google Calendar rejected the update (HTTP ${res.status}).`,
+        );
       }
       const data = (res.json ?? {}) as Record<string, unknown>;
       // A reschedule (start changed) re-arms reminders against the new time: cancel the old ones, then
@@ -798,6 +1055,11 @@ function buildUpdateEventTool(
             credentialRef: sel.credentialRef,
             offsetsHours: apptCfg.offsetsHours,
             askConfirmationOnLast: apptCfg.askConfirmationOnLast,
+            summary:
+              typeof data.summary === "string"
+                ? data.summary
+                : (input.summary ?? null),
+            calendarLabel: labels[calendarId] ?? null,
           });
         }
       }
@@ -807,9 +1069,9 @@ function buildUpdateEventTool(
       name: "calendar_update_event",
       description: withCalendarContext(
         `Reschedule or edit THIS customer's appointment (by its id, e.g. from calendar_list_events). Only an appointment belonging to this customer can be changed. Provide ONLY the fields to change. Dates use the same ISO 8601 / all-day format as create.`,
-        allowedCalendarsXml(allowed, labels),
+        calendarContextXml(allowed, labels),
       ),
-      schema: UPDATE_EVENT_SCHEMA,
+      schema: calendarArgSchema(UPDATE_EVENT_SCHEMA, allowed),
     },
   );
 }
@@ -820,12 +1082,12 @@ function buildCancelEventTool(
 ): StructuredToolInterface {
   const allowed = resolveAllowedCalendarIds(sel.config);
   const labels = resolveCalendarLabels(sel.config);
-  return tool(
+  return failableTool(
     async (input: { eventId: string; calendarId?: string }) => {
       const stamp = contactStamp(ctx);
       if (!stamp) return NO_CONTACT;
       const token = await resolveToken(sel, ctx);
-      if (!token) return NOT_CONNECTED;
+      if (!token) return toolFailure(NOT_CONNECTED);
       const pick = pickCalendarId(allowed, labels, input.calendarId);
       if ("error" in pick) return pick.error;
       const calendarId = pick.id;
@@ -840,11 +1102,13 @@ function buildCancelEventTool(
         );
       } catch (err) {
         logger.warn({ err }, "gcal: cancel ownership check failed");
-        return "Failed to reach Google Calendar. Try again shortly.";
+        return toolFailure(
+          "Failed to reach Google Calendar. Try again shortly.",
+        );
       }
       if (owner.status === 404) return FOREIGN_EVENT;
       if (owner.status < 200 || owner.status >= 300) {
-        return `Google Calendar returned HTTP ${owner.status}.`;
+        return toolFailure(`Google Calendar returned HTTP ${owner.status}.`);
       }
       const ownerEv = (owner.json ?? {}) as Record<string, unknown>;
       if (eventStamp(ownerEv) !== stamp) return FOREIGN_EVENT;
@@ -857,12 +1121,16 @@ function buildCancelEventTool(
         );
       } catch (err) {
         logger.warn({ err }, "gcal: cancel event request failed");
-        return "Failed to reach Google Calendar. Try again shortly.";
+        return toolFailure(
+          "Failed to reach Google Calendar. Try again shortly.",
+        );
       }
       // 204 No Content is the success shape; 410 Gone means it was already cancelled (idempotent).
       if (res.status === 410) return "The appointment was already cancelled.";
       if (res.status !== 204 && (res.status < 200 || res.status >= 300)) {
-        return `Google Calendar rejected the cancellation (HTTP ${res.status}).`;
+        return toolFailure(
+          `Google Calendar rejected the cancellation (HTTP ${res.status}).`,
+        );
       }
       // Drop any pending reminders for this appointment (best-effort).
       await ctx.cancelAppointmentReminders?.(input.eventId);
@@ -872,9 +1140,9 @@ function buildCancelEventTool(
       name: "calendar_cancel_event",
       description: withCalendarContext(
         `Cancel (delete) THIS customer's appointment by its id (e.g. from calendar_list_events). Only an appointment belonging to this customer can be cancelled.`,
-        allowedCalendarsXml(allowed, labels),
+        calendarContextXml(allowed, labels),
       ),
-      schema: CANCEL_EVENT_SCHEMA,
+      schema: calendarArgSchema(CANCEL_EVENT_SCHEMA, allowed),
     },
   );
 }
@@ -885,12 +1153,12 @@ function buildConfirmAppointmentTool(
 ): StructuredToolInterface {
   const allowed = resolveAllowedCalendarIds(sel.config);
   const labels = resolveCalendarLabels(sel.config);
-  return tool(
+  return failableTool(
     async (input: { eventId: string; calendarId?: string }) => {
       const stamp = contactStamp(ctx);
       if (!stamp) return NO_CONTACT;
       const token = await resolveToken(sel, ctx);
-      if (!token) return NOT_CONNECTED;
+      if (!token) return toolFailure(NOT_CONNECTED);
       const pick = pickCalendarId(allowed, labels, input.calendarId);
       if ("error" in pick) return pick.error;
       const calendarId = pick.id;
@@ -904,11 +1172,13 @@ function buildConfirmAppointmentTool(
         );
       } catch (err) {
         logger.warn({ err }, "gcal: confirm ownership check failed");
-        return "Failed to reach Google Calendar. Try again shortly.";
+        return toolFailure(
+          "Failed to reach Google Calendar. Try again shortly.",
+        );
       }
       if (owner.status === 404) return FOREIGN_EVENT;
       if (owner.status < 200 || owner.status >= 300) {
-        return `Google Calendar returned HTTP ${owner.status}.`;
+        return toolFailure(`Google Calendar returned HTTP ${owner.status}.`);
       }
       const ownerEv = (owner.json ?? {}) as Record<string, unknown>;
       if (eventStamp(ownerEv) !== stamp) return FOREIGN_EVENT;
@@ -938,10 +1208,14 @@ function buildConfirmAppointmentTool(
         );
       } catch (err) {
         logger.warn({ err }, "gcal: confirm event request failed");
-        return "Failed to reach Google Calendar. Try again shortly.";
+        return toolFailure(
+          "Failed to reach Google Calendar. Try again shortly.",
+        );
       }
       if (res.status < 200 || res.status >= 300) {
-        return `Google Calendar rejected the confirmation (HTTP ${res.status}).`;
+        return toolFailure(
+          `Google Calendar rejected the confirmation (HTTP ${res.status}).`,
+        );
       }
       return "The appointment was marked as confirmed.";
     },
@@ -949,9 +1223,9 @@ function buildConfirmAppointmentTool(
       name: "calendar_confirm_appointment",
       description: withCalendarContext(
         `Mark THIS customer's appointment as CONFIRMED after they confirm they will attend (by its id, e.g. from calendar_list_events). Prefixes the event title with [CONFIRMADO] and records the confirmation on the event. Only an appointment belonging to this customer can be confirmed.`,
-        allowedCalendarsXml(allowed, labels),
+        calendarContextXml(allowed, labels),
       ),
-      schema: CONFIRM_APPOINTMENT_SCHEMA,
+      schema: calendarArgSchema(CONFIRM_APPOINTMENT_SCHEMA, allowed),
     },
   );
 }

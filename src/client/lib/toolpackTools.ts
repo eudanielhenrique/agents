@@ -75,7 +75,7 @@ export function toolpackToolMeta(name: string, t: TFunction): ToolpackToolMeta {
         label: t("toolpackTools.asaas_payment_status.label", "Check payment"),
         description: t(
           "toolpackTools.asaas_payment_status.desc",
-          "Check the status of an Asaas payment link.",
+          "Check the status of an Asaas charge (PIX) or payment link.",
         ),
       };
     case "calendar_list_events":
@@ -87,7 +87,7 @@ export function toolpackToolMeta(name: string, t: TFunction): ToolpackToolMeta {
         ),
         description: t(
           "toolpackTools.calendar_list_events.desc",
-          "List this customer's own appointments within a time range (each customer only sees their own).",
+          "List this customer's own appointments within a time range (each customer only sees their own; holidays and closures never appear here).",
         ),
       };
     case "calendar_check_availability":
@@ -99,7 +99,7 @@ export function toolpackToolMeta(name: string, t: TFunction): ToolpackToolMeta {
         ),
         description: t(
           "toolpackTools.calendar_check_availability.desc",
-          "List bookable appointment times within a range, honoring the service hours and existing bookings.",
+          "List bookable appointment times within a range, honoring the service hours, existing bookings and any blocking calendars (holidays, closures).",
         ),
       };
     case "calendar_create_event":

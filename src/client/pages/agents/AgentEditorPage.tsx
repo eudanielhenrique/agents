@@ -49,6 +49,8 @@ import { useNavGuard } from "@/client/contexts/NavGuardContext";
 import { useTenantEvents } from "@/client/hooks/useTenantEvents";
 import { api } from "@/client/lib/api";
 import { computeConfigIssues } from "@/client/lib/configHealth";
+import { shouldRestoreUserBaseUrl } from "@/client/lib/credentialBaseUrl";
+import type { ApiErrorPayload } from "@/client/lib/types";
 import { slugify } from "@/client/lib/utils";
 import {
   invalidateVault,
@@ -64,6 +66,7 @@ import {
   type ChannelRedirectConfig,
   readChannelRedirectConfig,
 } from "@/modules/channel-redirect/service";
+import { readObservabilityConfig } from "@/modules/flowlog/settings";
 import { FOLLOW_UP_MAX_STEPS } from "@/modules/followups/settings";
 import {
   GUARDRAILS_DEFAULTS,
@@ -71,7 +74,7 @@ import {
   readGuardrailsConfig,
 } from "@/modules/guardrails/settings";
 import { DEFAULT_EXTRACTION_PROMPT } from "@/modules/vision/prompt-default";
-import { BehaviorTab } from "./BehaviorTab";
+import { BehaviorTab, type SendImageState } from "./BehaviorTab";
 import {
   type ChannelRedirectFormState,
   ChannelRedirectTab,
@@ -242,6 +245,7 @@ function readModelState(a: Agent) {
     credentialRef: str(mc.credentialRef),
     baseURL: str(mc.baseURL),
     temperature: num(mc.temperature),
+    reasoningEffort: str(mc.reasoningEffort),
   };
 }
 
@@ -290,6 +294,12 @@ function readBehaviorState(a: Agent) {
       ? (rawPix as import("./types").WhazingPixUiState)
       : null;
 
+  const ac = (s.attributeContext ?? {}) as Record<string, unknown>;
+  const si = (s.sendImage ?? {}) as Record<string, unknown>;
+
+  // NOTE: Attribute keys per scope: plain string lists (the runtime reader trims/dedups/caps them).
+  const attrKeys = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((k): k is string => typeof k === "string") : [];
   return {
     transferWithSummary: a.transferWithSummary,
     kanbanInstructions: str(ka.instructions),
@@ -374,6 +384,17 @@ function readBehaviorState(a: Agent) {
     limits: {
       maxToolCalls: num(li.maxToolCalls) || "10",
     },
+    attributeContext: {
+      conversation: attrKeys(ac.conversation),
+      contact: attrKeys(ac.contact),
+      task: attrKeys(ac.task),
+    },
+    sendImage: { allowedHosts: attrKeys(si.allowedHosts).join("\n") },
+    // NOTE: through the SAME reader the runtime uses, not a hand-rolled check: a bag that came from
+    // REST or an import can carry the string "true", which the runtime honors — reading it stricter
+    // here would show the switch off while values were being logged, and would then persist that lie
+    // on the next save.
+    observability: readObservabilityConfig(s),
   };
 }
 
@@ -620,6 +641,21 @@ export function AgentEditorPage() {
   });
   // Runtime limits. Mirrors agent.settings.limits (modules/agents/limits): the per-turn tool-call cap.
   const [limits, setLimits] = useState({ maxToolCalls: "10" });
+  // Whether this agent's tool lines log the values the model sent instead of their shape. Mirrors
+  // agent.settings.observability (modules/flowlog/settings).
+  const [observability, setObservability] = useState({ logToolValues: false });
+  // NOTE: Hosts the send_image tool may fetch from. Mirrors agent.settings.sendImage
+  // (modules/images/settings), edited as one host per line.
+  const [sendImage, setSendImage] = useState<SendImageState>({
+    allowedHosts: "",
+  });
+  // NOTE: Which Chatwoot custom attributes are injected into the prompt as current values, per
+  // scope. Mirrors agent.settings.attributeContext (modules/chatwoot/attributes).
+  const [attributeContext, setAttributeContext] = useState<{
+    conversation: string[];
+    contact: string[];
+    task: string[];
+  }>({ conversation: [], contact: [], task: [] });
   // WhatsApp → website-chat redirect. Its own editor section (own Save + dirty tracking), though the
   // config lives in agent.settings.channelRedirect. Mirrors modules/channel-redirect/service.
   const [channelRedirect, setChannelRedirect] =
@@ -673,6 +709,7 @@ export function AgentEditorPage() {
     credentialRef: "",
     baseURL: "",
     temperature: "",
+    reasoningEffort: "",
   });
   // Base URL from the selected model credential (locks the input when set).
   const [modelCredBaseUrl, setModelCredBaseUrl] = useState<string | null>(null);
@@ -784,6 +821,9 @@ export function AgentEditorPage() {
     setFollowUp(b.followUp);
     setVision(b.vision);
     setLimits(b.limits);
+    setObservability(b.observability);
+    setSendImage(b.sendImage);
+    setAttributeContext(b.attributeContext);
     setChannelRedirect(readChannelRedirectState(a));
     setGuardrails(readGuardrailsConfig(a.settings));
   }, []);
@@ -814,6 +854,9 @@ export function AgentEditorPage() {
     setFollowUp(b.followUp);
     setVision(b.vision);
     setLimits(b.limits);
+    setObservability(b.observability);
+    setSendImage(b.sendImage);
+    setAttributeContext(b.attributeContext);
   }, []);
 
   // Reset ONLY the channelRedirect section from a synced agent — the post-save sync for the Redirect tab.
@@ -950,6 +993,11 @@ export function AgentEditorPage() {
     if (model.credentialRef) cfg.credentialRef = model.credentialRef;
     if (model.baseURL.trim()) cfg.baseURL = model.baseURL.trim();
     if (model.temperature !== "") cfg.temperature = Number(model.temperature);
+    // Only openai has the endpoint that carries reasoning together with tools, and the backend
+    // schema rejects the field on every other provider — so a leftover value from a provider swap
+    // must not be serialized.
+    if (model.reasoningEffort && model.provider === "openai")
+      cfg.reasoningEffort = model.reasoningEffort;
     return cfg;
   }
 
@@ -1068,6 +1116,18 @@ export function AgentEditorPage() {
       limits: {
         maxToolCalls: Number(limits.maxToolCalls) || 10,
       },
+      observability: { logToolValues: observability.logToolValues },
+      attributeContext: {
+        conversation: attributeContext.conversation,
+        contact: attributeContext.contact,
+        task: attributeContext.task,
+      },
+      sendImage: {
+        allowedHosts: sendImage.allowedHosts
+          .split("\n")
+          .map((h) => h.trim())
+          .filter(Boolean),
+      },
     };
   }
 
@@ -1097,6 +1157,9 @@ export function AgentEditorPage() {
       followUp,
       vision,
       limits,
+      attributeContext,
+      sendImage,
+      observability,
     }),
     // The WhatsApp→website-chat redirect (own Save button). widgetInboxId is excluded (server-owned,
     // persisted on provision), so provisioning the widget never lights up this tab's unsaved-changes dot.
@@ -1587,6 +1650,9 @@ export function AgentEditorPage() {
     setFollowUp(b.followUp);
     setVision(b.vision);
     setLimits(b.limits);
+    setObservability(b.observability);
+    setSendImage(b.sendImage);
+    setAttributeContext(b.attributeContext);
   };
   const revertChannelRedirect = () => {
     const a = syncedAgentRef.current;
@@ -1696,8 +1762,17 @@ export function AgentEditorPage() {
       markSynced(String(data.agent.updatedAt));
       bumpSync(section);
       showToast(t("editor.saved", "Agent saved."), "success");
-    } catch {
-      showToast(t("editor.saveError", "Could not save the agent."), "error");
+    } catch (e) {
+      // NOTE: surface the backend's localized message when present (e.g. the prompt-size cap)
+      // instead of the generic failure toast.
+      const apiMsg =
+        e && typeof e === "object" && "value" in e
+          ? ((e as { value?: ApiErrorPayload }).value?.error ?? null)
+          : null;
+      showToast(
+        apiMsg || t("editor.saveError", "Could not save the agent."),
+        "error",
+      );
     } finally {
       savingRef.current -= 1;
       setSavingAgent(false);
@@ -2007,13 +2082,16 @@ export function AgentEditorPage() {
     });
   }
 
-  // Closed-over callback for model credential entry change (preserves ref across tab unmounts).
+  // NOTE: Closed-over callback for model credential entry change (preserves ref across tab
+  // unmounts). The `else if` is load-bearing: on mount the picker reports the resolved entry, and a
+  // credential WITHOUT a baseUrl must leave the persisted field alone (shouldRestoreUserBaseUrl).
   const onModelEntryChange = (entry: VaultEntry | null) => {
     const credUrl = entry?.baseUrl ?? null;
+    const restore = shouldRestoreUserBaseUrl(modelCredBaseUrl, credUrl);
     setModelCredBaseUrl(credUrl);
     if (credUrl) {
       modelUserBaseUrlRef.current = model.baseURL;
-    } else {
+    } else if (restore) {
       setModel((prev) => ({
         ...prev,
         baseURL: modelUserBaseUrlRef.current,
@@ -2024,11 +2102,12 @@ export function AgentEditorPage() {
   // Closed-over callback for STT credential entry change (preserves sttUserBaseUrlRef across tab unmounts).
   const onSttEntryChange = (entry: VaultEntry | null) => {
     const credUrl = entry?.baseUrl ?? null;
+    const restore = shouldRestoreUserBaseUrl(sttCredBaseUrl, credUrl);
     setSttCredBaseUrl(credUrl);
     if (credUrl) {
       // Lock: preserve the user's own value while locked.
       sttUserBaseUrlRef.current = stt.baseURL;
-    } else {
+    } else if (restore) {
       // Unlock: restore the user's own value.
       setStt((prev) => ({
         ...prev,
@@ -2040,10 +2119,11 @@ export function AgentEditorPage() {
   // Closed-over callback for vision credential entry change (mirror of onSttEntryChange).
   const onVisionEntryChange = (entry: VaultEntry | null) => {
     const credUrl = entry?.baseUrl ?? null;
+    const restore = shouldRestoreUserBaseUrl(visionCredBaseUrl, credUrl);
     setVisionCredBaseUrl(credUrl);
     if (credUrl) {
       visionUserBaseUrlRef.current = vision.baseURL;
-    } else {
+    } else if (restore) {
       setVision((prev) => ({
         ...prev,
         baseURL: visionUserBaseUrlRef.current,
@@ -2478,6 +2558,12 @@ export function AgentEditorPage() {
                 onVisionEntryChange={onVisionEntryChange}
                 limits={limits}
                 setLimits={setLimits}
+                observability={observability}
+                setObservability={setObservability}
+                sendImage={sendImage}
+                setSendImage={setSendImage}
+                attributeContext={attributeContext}
+                setAttributeContext={setAttributeContext}
                 onScheduleSaved={onScheduleSaved}
                 dirty={dirty.behavior}
                 saving={savingAgent}

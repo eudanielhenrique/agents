@@ -5,25 +5,30 @@ import type { PrismaClient } from "@/../generated/prisma/client";
 import logger from "@/api/lib/logger";
 import basePrisma from "@/api/lib/prisma";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
+import { overlayMediaAnnotations } from "@/modules/chatwoot/annotations";
 import type { ChatwootClient } from "@/modules/chatwoot/client";
 import { loadChatwootClient } from "@/modules/chatwoot/instance";
 import {
   buildQuoteResolver,
+  maxIncomingId,
   parseChatwootMessages,
 } from "@/modules/chatwoot/messages";
 import {
   firstAudioAttachment,
+  firstLocationAttachment,
   isIncomingMessage,
   shouldBotHandle,
 } from "@/modules/chatwoot/normalize";
 import { renderInboundMessage } from "@/modules/chatwoot/render";
 import type { NormalizedChatwootEvent } from "@/modules/chatwoot/types";
+import { advanceHandledWatermark } from "@/modules/debounce/watermark";
 import {
   emitFlowEvent,
   type FlowContext,
   withFlowStage,
 } from "@/modules/flowlog/service";
 import { analyzeGuardrail } from "@/modules/guardrails/analyze";
+import type { ImageFetchDeps } from "@/modules/images/fetch";
 import { deliverReply } from "@/modules/split/service";
 import { llmNormalizeForSpeech } from "@/modules/tts/normalize";
 import { synthesizeReply } from "@/modules/tts/service";
@@ -43,7 +48,7 @@ import {
 import { AgentStatusReporter } from "./status";
 import { ToolFlowLogger } from "./tool-flowlog";
 import type { McpLoadDeps } from "./tools/mcp";
-import { buildNativeTools } from "./tools/native";
+import { buildNativeTools, type TurnState } from "./tools/native";
 import type { UsagePersist } from "./usage";
 
 // The agent runtime: an incoming Chatwoot message (gate=act) → resolve the inbox's Agent config
@@ -79,6 +84,8 @@ export interface RuntimeDeps {
   mcp?: McpLoadDeps;
   // Injectable fetch for the TTS provider (tests); real fetch in production.
   ttsFetch?: typeof fetch;
+  // Injectable download + SSRF assertion for send_image (tests); the real ones in production.
+  imageDeps?: ImageFetchDeps;
   // Injectable LLM speech normalizer (tests); production builds one from the agent's model when the
   // agent enables tts.normalize. Best-effort — synthesizeReply falls back to raw text on failure.
   normalizeSpeech?: (text: string) => Promise<string>;
@@ -109,6 +116,97 @@ export interface RunLoadedTurnParams {
   // false suppresses the reply (outcome "superseded"). Used by the debounce flush to drop a reply
   // when a newer message arrived mid-turn; the re-armed flush then answers the full burst.
   shouldPost?: () => Promise<boolean>;
+}
+
+// Applies a deferred resolve_conversation intent AFTER the reply is delivered. The tool only
+// records the intent (see tools/native.ts TurnState): toggling mid-turn makes the webhook mirror
+// flip Conversation.status before the recheck, which then reads our own resolve as a human
+// takeover and discards the generated reply — and posting into a resolved conversation reopens
+// it anyway (same invariant as nudge.ts applyPostActions). Invariant: called ONLY on the
+// "posted" and "empty" outcomes; the intent is discarded on taken-over / superseded / blocked /
+// throw. Best-effort, never throws: the reply is already out, so a failed toggle only leaves the
+// conversation pending (flow warn pages the operator).
+async function applyDeferredResolve(
+  client: ChatwootClient,
+  conversationId: number,
+  turnState: TurnState,
+  flow: FlowContext,
+): Promise<void> {
+  if (!turnState.resolveRequested) return;
+  turnState.resolveRequested = false;
+  try {
+    await client.toggleStatus(conversationId, "resolved");
+    emitFlowEvent(flow, {
+      stage: "handoff",
+      status: "ok",
+      detail: { outcome: "resolved" },
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    logger.warn(
+      "deferred resolve failed (conv=%s): %s",
+      String(conversationId),
+      msg,
+    );
+    emitFlowEvent(flow, {
+      stage: "handoff",
+      level: "warn",
+      status: "error",
+      detail: { outcome: "resolved" },
+      errorMessage: msg,
+    });
+  }
+}
+
+// Delivers the images the agent queued this turn, AFTER the same gates the reply passes. Best-effort
+// per image: one failed attachment must not cost the customer the reply that follows it. Invariant:
+// called only on the "posted" and "empty" outcomes — a superseded, taken-over or blocked turn drops
+// the queue, exactly like the deferred resolve intent. Returns whether the customer actually received
+// something, which is what makes an image-only turn count as answered.
+async function deliverPendingImages(
+  client: ChatwootClient,
+  conversationId: number,
+  turnState: TurnState,
+  flow: FlowContext,
+): Promise<boolean> {
+  // NOTE: Sorted by the model's tool-call order, not by the order the downloads finished in — the
+  // batch runs concurrently, and a caption only makes sense next to the picture it was written for.
+  const queued = turnState.pendingImages
+    .splice(0)
+    .sort((a, b) => a.order - b.order);
+  let sent = false;
+  for (const img of queued) {
+    try {
+      await client.sendFileAttachment(
+        conversationId,
+        img.bytes,
+        img.fileName,
+        img.mime,
+        { caption: img.caption },
+      );
+      sent = true;
+      emitFlowEvent(flow, {
+        stage: "tool",
+        status: "ok",
+        detail: { tool: "send_image", outcome: "sent" },
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.warn(
+        "send_image delivery failed (conv=%s): %s",
+        String(conversationId),
+        msg,
+      );
+      emitFlowEvent(flow, {
+        stage: "tool",
+        level: "warn",
+        status: "error",
+        detail: { tool: "send_image", outcome: "failed" },
+        errorMessage: msg,
+      });
+    }
+  }
+  return sent;
 }
 
 // Builds the client + tools + graph from an already-loaded AgentConfig, invokes the thread, re-checks
@@ -147,6 +245,13 @@ export async function runLoadedTurn(
     makeClient: params.deps?.makeClient,
     botToken: loaded.agentBotToken ?? undefined,
   });
+  // Per-turn mutable state shared with the native tools (deferred resolve intent).
+  const turnState: TurnState = {
+    resolveRequested: false,
+    pendingImages: [],
+    imagesInFlight: 0,
+    imagesSeq: 0,
+  };
   const tools = await buildToolset(
     loaded,
     {
@@ -157,6 +262,8 @@ export async function runLoadedTurn(
       conversationId,
       threadId,
       messageId: params.messageId,
+      imageDeps: params.deps?.imageDeps,
+      turnState,
     },
     { buildNativeTools, mcp: params.deps?.mcp, flow },
   );
@@ -173,6 +280,18 @@ export async function runLoadedTurn(
         level: "warn",
         status: "ok",
         detail: { toolLimitHit: maxToolCalls, toolCalls },
+      }),
+    // A turn recovered from an empty provider response must not read like a clean one: without this
+    // line the fault is invisible and its rate (issue #63 measured 1 in 184 on one install) can
+    // never be told apart from a turn that simply worked.
+    onModelRetry: ({ attempt }) =>
+      emitFlowEvent(flow, {
+        stage: "generate",
+        level: "warn",
+        status: "ok",
+        provider: loaded.mc.provider,
+        model: loaded.mc.model,
+        detail: { retriedEmptyResponse: attempt },
       }),
   });
   const callbacks = buildCallbacks(loaded, {
@@ -247,7 +366,10 @@ export async function runLoadedTurn(
     conversationDbId: loaded.conversationDbId,
   });
   // Logs each tool call (name/status/duration) under this turn's flow group.
-  const toolLogger = new ToolFlowLogger(flow);
+  const toolLogger = new ToolFlowLogger(flow, {
+    logValues: loaded.logToolValues,
+    tools,
+  });
 
   // Guardrails (input/output moderation): build the guardrails agent's model once (its OWN
   // credential, resolved in loadAgentConfig). runGuardrail returns null when nothing tripped,
@@ -268,20 +390,39 @@ export async function runLoadedTurn(
       : null;
   const runGuardrail = async (
     direction: "input" | "output",
-    text: string,
+    // NOTE: Named `subject` rather than `text` on purpose. As `text` it shadowed this function's
+    // enclosing `text` (the customer's message), and the answer_relevance check below needs BOTH:
+    // the reply under review and the message it is supposed to answer.
+    subject: string,
   ): Promise<{ reply: string | null } | null> => {
     const dir = gr[direction];
     if (!guardrailModel || !dir.enabled) return null;
     const verdict = await analyzeGuardrail(guardrailModel, {
       direction,
-      text,
+      text: subject,
       checks: dir.checks,
       competitors: gr.competitors,
       customPolicy: gr.customPolicy,
       systemPrompt: direction === "output" ? loaded.systemPrompt : undefined,
+      // The raw inbound text, not `turnText`: on the first turn of a new conversation the latter
+      // carries CONVERSATION_DIVIDER, and handing the guardrail a system marker as the customer's
+      // words would make it judge the reply against something nobody said.
+      customerMessage: direction === "output" ? text : undefined,
       generationPrompt:
         dir.action === "generated" ? dir.generationPrompt : undefined,
     });
+    // A guardrail that could not run reads exactly like one that ran and approved, so without this
+    // line an expired credential is silent moderation for as long as nobody notices. The turn is
+    // NOT blocked (fail-open stays), only recorded.
+    if (verdict.error) {
+      emitFlowEvent(flow, {
+        stage: "guardrail",
+        status: "error",
+        level: "warn",
+        detail: { direction, outcome: "analysis_failed" },
+        errorMessage: verdict.error,
+      });
+    }
     if (!verdict.violated) return null;
     emitFlowEvent(flow, {
       stage: "guardrail",
@@ -322,6 +463,12 @@ export async function runLoadedTurn(
     const inGuard = await runGuardrail("input", turnText);
     if (inGuard) {
       if (inGuard.reply !== null) {
+        // NOTE: The guardrail reply is a post like any other, so it claims the trigger through the
+        // same gate: without this, two concurrent deliveries that both trip the guardrail each post
+        // their template, and a stale one posts over newer customer input.
+        if (params.shouldPost && !(await params.shouldPost())) {
+          return "superseded";
+        }
         await client.sendMessage(conversationId, inGuard.reply);
         deliveredBalloons = 1;
         return "posted";
@@ -351,7 +498,6 @@ export async function runLoadedTurn(
         ),
     );
     let reply = lastAssistantText(result.messages).trim();
-    if (!reply) return "empty";
 
     // Re-check the live assignee (mirror) before posting: a human may have taken over during
     // the LLM call. NOTE: small TOCTOU between this read and the POST (the post is network and
@@ -398,16 +544,62 @@ export async function runLoadedTurn(
       return "taken-over";
     }
 
-    // Last-moment supersede gate (debounce): a newer message arrived mid-turn → drop this reply.
+    // Last-moment supersede gate (debounce): a newer message arrived mid-turn → drop this reply
+    // AND any deferred resolve intent (the re-armed flush re-decides over the full burst).
     if (params.shouldPost && !(await params.shouldPost())) return "superseded";
 
     // OUTPUT guardrail: screen the model's reply BEFORE delivery. On a violation, replace it with the
-    // template / a guardrails-generated safe reply, or suppress the send entirely ("silent").
-    const outGuard = await runGuardrail("output", reply);
+    // template / a guardrails-generated safe reply, or suppress the send entirely ("silent"). A
+    // suppressed send also discards the deferred resolve intent — resolving a conversation whose
+    // goodbye was blocked would strand the customer with no reply and no human.
+    // NOTE: The captions ride along into the screening: they are model-written text the customer
+    // reads, so moderating the reply while a caption goes out unread would be a hole. A trip drops
+    // the queue — the safe reply replaces what the model wrote, images included. This sits ABOVE the
+    // empty-reply branch because a caption is customer-facing text even when the model produced no
+    // final message of its own (skip_reply with an image is a legitimate shape).
+    const captions = turnState.pendingImages
+      .map((i) => i.caption?.trim())
+      .filter((c): c is string => !!c);
+    const screened = [reply, ...captions].filter(Boolean).join("\n");
+    const outGuard = screened ? await runGuardrail("output", screened) : null;
     if (outGuard) {
+      turnState.pendingImages.length = 0;
       if (outGuard.reply === null) return "blocked";
       reply = outGuard.reply;
     }
+
+    // Empty reply: no text to post, but the queued images and a deferred resolve intent still apply
+    // (both are legitimate shapes with no final text). This runs AFTER the recheck and the supersede
+    // gate on purpose: resolving under a takeover belongs to the human, and resolving under a
+    // superseded turn would make the next flush's gate read "resolved" and swallow the customer's
+    // newest message via the watermark.
+    // NOTE: An image that reached the customer IS an answer, so the turn reports "posted" — the
+    // callers key the error-cleared/answered bookkeeping off that word, and an image-only turn that
+    // reported "empty" would leave a stale turn error on a conversation that was just answered.
+    if (!reply) {
+      const queued = turnState.pendingImages.length;
+      const sent = await deliverPendingImages(
+        client,
+        conversationId,
+        turnState,
+        flow,
+      );
+      // NOTE: The images WERE the turn and none of them reached the customer. That is a failed turn,
+      // not a silent one: returning "empty" here would let the deferred resolve close a conversation
+      // nobody answered, and the callers only record a turn error (private note, lastError, alert)
+      // when the turn THROWS. Best-effort per image still holds where a reply carries the turn.
+      if (queued > 0 && !sent) {
+        throw new Error(
+          "send_image: nenhuma imagem foi entregue e o turno não tinha resposta em texto",
+        );
+      }
+      await applyDeferredResolve(client, conversationId, turnState, flow);
+      return sent ? "posted" : "empty";
+    }
+
+    // The image lands before the text that talks about it, and before the TTS branch: an audio
+    // reply must not swallow the attachment.
+    await deliverPendingImages(client, conversationId, turnState, flow);
 
     // Reply modality: audio (TTS) per the agent's mode + the customer's modality/preference, else
     // text. TTS is best-effort — any synthesis failure falls back to a text reply, never drops it.
@@ -429,6 +621,11 @@ export async function runLoadedTurn(
             apiKey: loaded.apiKey,
             baseURL: loaded.credentialBaseUrl ?? loaded.mc.baseURL,
             temperature: 0,
+            // NOTE: dropped for the same reason temperature is pinned to 0 — this pass rewrites the
+            // agent's own reply for speech (strip markdown, spell out symbols), and the effort the
+            // operator chose is about how the agent THINKS, not about a mechanical rewrite the
+            // customer is waiting on. Reasoning here would only add latency to the audio reply.
+            reasoningEffort: undefined,
           });
           normalizeSpeech = (t) => llmNormalizeForSpeech(normModel, t);
         }
@@ -436,6 +633,7 @@ export async function runLoadedTurn(
           tenantId,
           cfg: loaded.ttsConfig,
           text: reply,
+          channelType: loaded.channelType,
           base,
           deps: { fetchImpl: params.deps?.ttsFetch, normalizeSpeech },
           flow,
@@ -455,6 +653,7 @@ export async function runLoadedTurn(
             reply.length,
           );
           deliveredBalloons = 1;
+          await applyDeferredResolve(client, conversationId, turnState, flow);
           return "posted";
         }
       } catch (e) {
@@ -484,6 +683,7 @@ export async function runLoadedTurn(
       balloons,
     );
     deliveredBalloons = balloons;
+    await applyDeferredResolve(client, conversationId, turnState, flow);
     return "posted";
   } finally {
     clearTurnInFlight(threadId);
@@ -519,6 +719,7 @@ export async function runAgentTurn(
     attachmentTypes: (n.message?.attachments ?? [])
       .map((a) => a.fileType)
       .filter((t): t is string => t !== null),
+    location: firstLocationAttachment(n.message?.attachments),
     inReplyTo: n.message?.inReplyTo,
     isReaction: n.message?.isReaction,
   };
@@ -540,6 +741,9 @@ export async function runAgentTurn(
       const page = parseChatwootMessages(
         await client.getMessages(conversationId),
       );
+      // NOTE: On upstream Chatwoot the meta write-back never lands, so a quoted voice note only
+      // resolves to its transcription through the in-process overlay (issue #49).
+      overlayMediaAnnotations(tenantId, instanceId, page);
       const withQuote = renderInboundMessage(renderable, {
         resolveQuoted: buildQuoteResolver(page),
       });
@@ -576,7 +780,49 @@ export async function runAgentTurn(
   });
   if (!loaded) return "no-agent";
 
-  return runLoadedTurn({
+  // NOTE: Post gate, mirroring the debounce flush (issue #49): concurrent direct turns on the same
+  // conversation (webhook deliveries are not serialized) each generate a reply — without this gate
+  // the STALE one posts too, answering a message the customer already moved past. Re-fetch to
+  // detect a newer incoming message (defer to its own turn), then advance the watermark via the
+  // monotonic CAS so a duplicate/stale claim can never double-post. Re-fetch failure is non-fatal
+  // (same contract as the flush); the CAS is the backstop.
+  const triggerId = n.message?.id ?? null;
+  const convDbId = loaded.conversationDbId;
+  const shouldPost =
+    triggerId !== null && convDbId !== null
+      ? async (): Promise<boolean> => {
+          try {
+            const client = await loadChatwootClient(tenantId, instanceId, {
+              base,
+              makeClient: params.deps?.makeClient,
+            });
+            const latest = parseChatwootMessages(
+              await client.getMessages(conversationId),
+            );
+            if (maxIncomingId(latest, triggerId) > triggerId) {
+              logger.info(
+                "direct turn: superseded mid-turn (conv=%s), deferring",
+                String(conversationId),
+              );
+              return false;
+            }
+          } catch (e) {
+            logger.warn(
+              "direct turn: supersede re-fetch failed (conv=%s): %s",
+              String(conversationId),
+              e instanceof Error ? e.message : String(e),
+            );
+          }
+          return advanceHandledWatermark({
+            tenantId,
+            conversationDbId: convDbId,
+            toMessageId: triggerId,
+            base,
+          });
+        }
+      : undefined;
+
+  const outcome = await runLoadedTurn({
     loaded,
     tenantId,
     instanceId,
@@ -588,5 +834,33 @@ export async function runAgentTurn(
     userSentAudio: firstAudioAttachment(n) !== null,
     base,
     deps: params.deps,
+    shouldPost,
   });
+  // NOTE: Watermark tail for the outcomes shouldPost's CAS did not cover ("posted" already advanced):
+  // empty/blocked consumed the message, taken over hands it to the human — left alone the watermark
+  // stays NULL forever, and the first flush after debounce is later enabled (or after an arm failure
+  // fell back here) re-answers the whole recent page (issue #8). "superseded" stays put BY DESIGN:
+  // the newer message's own turn advances past it. Best-effort — a watermark miss must not fail the
+  // turn.
+  if (
+    outcome !== "superseded" &&
+    n.message?.id != null &&
+    loaded.conversationDbId !== null
+  ) {
+    try {
+      await advanceHandledWatermark({
+        tenantId,
+        conversationDbId: loaded.conversationDbId,
+        toMessageId: n.message.id,
+        base,
+      });
+    } catch (e) {
+      logger.warn(
+        "advance handled watermark failed (conv=%s): %s",
+        String(conversationId),
+        e instanceof Error ? e.message : String(e),
+      );
+    }
+  }
+  return outcome;
 }

@@ -1,3 +1,4 @@
+import { ZodError } from "zod";
 import type { PrismaClient } from "@/../generated/prisma/client";
 import {
   setBrandingAsset,
@@ -25,7 +26,12 @@ import {
   mergeBehaviorSettings,
   readBehaviorSettings,
 } from "@/modules/agents/behavior-settings";
-import { getAgent, listAgents, updateAgent } from "@/modules/agents/service";
+import {
+  assertPromptSize,
+  getAgent,
+  listAgents,
+  updateAgent,
+} from "@/modules/agents/service";
 import { type AuditEntry, recordAudit } from "@/modules/audit/service";
 import {
   createPendingVaultEntry,
@@ -90,6 +96,14 @@ export function truncForAudit(v: unknown): unknown {
     return o;
   }
   return v;
+}
+
+// NOTE: service-layer ZodErrors must surface as a tool result (err), never bubble raw into the
+// MCP SDK's generic exception envelope.
+function zodIssuesMessage(e: ZodError): string {
+  return `validation failed: ${e.issues
+    .map((i) => `${i.path.map(String).join(".") || "value"}: ${i.message}`)
+    .join("; ")}`;
 }
 
 export function ctxOf(principal: VerifiedToken): TenantContext {
@@ -310,6 +324,7 @@ export async function credentialCreate(
     });
   } catch (e) {
     if (e instanceof AppError) return err(e.message);
+    if (e instanceof ZodError) return err(zodIssuesMessage(e));
     throw e;
   }
 }
@@ -339,6 +354,9 @@ export async function promptSet(
   }
 
   try {
+    // NOTE: checked here (not only inside updateAgent) so the DRY-RUN path enforces the cap too —
+    // a preview must never claim a diff the apply would reject.
+    assertPromptSize(args.system_prompt);
     const current = await getAgent(ctx, agentId, base);
     const beforeProj = { systemPrompt: current.systemPrompt };
     const afterProj = { systemPrompt: args.system_prompt };
@@ -367,6 +385,7 @@ export async function promptSet(
     return ok({ dryRun: false, applied: true, target, diff });
   } catch (e) {
     if (e instanceof AppError) return err(e.message);
+    if (e instanceof ZodError) return err(zodIssuesMessage(e));
     throw e;
   }
 }
@@ -391,6 +410,7 @@ export async function agentList(
     });
   } catch (e) {
     if (e instanceof AppError) return err(e.message);
+    if (e instanceof ZodError) return err(zodIssuesMessage(e));
     throw e;
   }
 }
@@ -445,6 +465,7 @@ export async function agentSettingsGet(
     return ok({ agentId: agent.id, settings });
   } catch (e) {
     if (e instanceof AppError) return err(e.message);
+    if (e instanceof ZodError) return err(zodIssuesMessage(e));
     throw e;
   }
 }
@@ -487,12 +508,17 @@ export async function agentSettingsSet(
   if (args.followUp !== undefined) patch.followUp = args.followUp;
   if (args.handoff !== undefined) patch.handoff = args.handoff;
   if (args.limits !== undefined) patch.limits = args.limits;
+  if (args.observability !== undefined)
+    patch.observability = args.observability;
   if (args.channelRedirect !== undefined)
     patch.channelRedirect = args.channelRedirect;
   if (args.guardrails !== undefined) patch.guardrails = args.guardrails;
+  if (args.attributeContext !== undefined)
+    patch.attributeContext = args.attributeContext;
+  if (args.sendImage !== undefined) patch.sendImage = args.sendImage;
   if (Object.keys(patch).length === 0) {
     return err(
-      "no updatable fields provided (debounce, stt, tts, vision, split, serviceWindow, followUp, handoff, limits, channelRedirect, guardrails and/or grounding)",
+      "no updatable fields provided (debounce, stt, tts, vision, split, serviceWindow, followUp, handoff, limits, channelRedirect, guardrails, attributeContext, sendImage, observability and/or grounding)",
     );
   }
 
@@ -578,6 +604,7 @@ export async function agentSettingsSet(
     });
   } catch (e) {
     if (e instanceof AppError) return err(e.message);
+    if (e instanceof ZodError) return err(zodIssuesMessage(e));
     throw e;
   }
 }
@@ -637,6 +664,7 @@ export async function tenantUpdate(
     return ok({ dryRun: false, applied: true, target, diff });
   } catch (e) {
     if (e instanceof AppError) return err(e.message);
+    if (e instanceof ZodError) return err(zodIssuesMessage(e));
     throw e;
   }
 }
@@ -647,6 +675,9 @@ export interface BrandingSetArgs {
   brand_color?: string | null;
   tokens_light?: Record<string, unknown>;
   tokens_dark?: Record<string, unknown>;
+  site_url?: string | null;
+  support_email?: string | null;
+  hide_github_link?: boolean;
   dry_run?: boolean;
 }
 
@@ -674,9 +705,16 @@ export async function brandingSet(
   if (args.brand_color !== undefined) update.brandColor = args.brand_color;
   if (args.tokens_light !== undefined) update.tokensLight = args.tokens_light;
   if (args.tokens_dark !== undefined) update.tokensDark = args.tokens_dark;
+  if (args.site_url !== undefined) update.siteUrl = args.site_url;
+  if (args.support_email !== undefined) {
+    update.supportEmail = args.support_email;
+  }
+  if (args.hide_github_link !== undefined) {
+    update.hideGithubLink = args.hide_github_link;
+  }
   if (Object.keys(update).length === 0) {
     return err(
-      "no updatable fields provided (brand_name, color_mode, brand_color, tokens_light and/or tokens_dark)",
+      "no updatable fields provided (brand_name, color_mode, brand_color, tokens_light, tokens_dark, site_url, support_email and/or hide_github_link)",
     );
   }
 
@@ -688,6 +726,9 @@ export async function brandingSet(
       brandColor: before.brandColor,
       tokensLight: before.tokensLight,
       tokensDark: before.tokensDark,
+      siteUrl: before.siteUrl,
+      supportEmail: before.supportEmail,
+      hideGithubLink: before.hideGithubLink,
     };
     const target = "branding:global";
 
@@ -712,6 +753,15 @@ export async function brandingSet(
           string,
           unknown
         >,
+        siteUrl:
+          update.siteUrl === undefined
+            ? before.siteUrl
+            : update.siteUrl || null,
+        supportEmail:
+          update.supportEmail === undefined
+            ? before.supportEmail
+            : update.supportEmail || null,
+        hideGithubLink: update.hideGithubLink ?? before.hideGithubLink,
       };
       return ok({
         dryRun: true,
@@ -727,6 +777,9 @@ export async function brandingSet(
       brandColor: after.brandColor,
       tokensLight: after.tokensLight,
       tokensDark: after.tokensDark,
+      siteUrl: after.siteUrl,
+      supportEmail: after.supportEmail,
+      hideGithubLink: after.hideGithubLink,
     };
     // Fleet-level audit (tenant_id NULL); the write tx runs asSuperAdmin.
     await recordMcpAudit(
@@ -749,6 +802,7 @@ export async function brandingSet(
     });
   } catch (e) {
     if (e instanceof AppError) return err(e.message);
+    if (e instanceof ZodError) return err(zodIssuesMessage(e));
     throw e;
   }
 }
@@ -871,6 +925,7 @@ export async function brandingAssetSet(
     });
   } catch (e) {
     if (e instanceof AppError) return err(e.message);
+    if (e instanceof ZodError) return err(zodIssuesMessage(e));
     throw e;
   }
 }
