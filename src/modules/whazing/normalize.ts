@@ -134,7 +134,10 @@ export function normalizeWhazingEvent(
     message = normalizeMessage(r.message);
   } else if (r.messageId != null || r.messageBody != null) {
     const attachments: NormalizedWhazingAttachment[] = [];
-    if (r.mediaType || r.mediaUrl) {
+    // `mediaType` classifies EVERY message ("chat" for plain text, "audio" for voice, ...) — it is
+    // never absent, so gating on its truthiness treated every ordinary text message as an
+    // attachment. The actual "there is a file" signal is a real media URL/payload.
+    if (r.mediaUrl || r.mediaBase64) {
       attachments.push({
         id: null,
         mediaType: str(r.mediaType),

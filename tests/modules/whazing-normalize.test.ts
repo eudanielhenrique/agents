@@ -205,6 +205,40 @@ describe("normalizeWhazingEvent", () => {
       "https://cdn.whazing.com/audio.ogg",
     );
   });
+
+  // Regression: Whazing's flat webhook shape (B) tags EVERY message with a `mediaType`
+  // classification ("chat" for plain text, "audio" for voice, ...) — it is never absent. Gating
+  // attachment creation on its truthiness turned every ordinary text message into a phantom
+  // attachment, which renderWhazingMessage then rendered as "<mensagem-de-arquivo />", making the
+  // agent hallucinate "recebi seu arquivo" on plain replies like "Obrigado".
+  test("shape B plain text (mediaType classification, no media URL) has no attachments", () => {
+    const ev = normalizeWhazingEvent({
+      messageId: "m1",
+      messageBody: "Obrigado",
+      fromMe: false,
+      mediaType: "chat",
+      mediaUrl: null,
+      ticket: { id: 1, status: "pending" },
+    });
+    expect(ev?.message?.body).toBe("Obrigado");
+    expect(ev?.message?.attachments).toHaveLength(0);
+  });
+
+  test("shape B real attachment (media URL present) is normalized", () => {
+    const ev = normalizeWhazingEvent({
+      messageId: "m2",
+      messageBody: null,
+      fromMe: false,
+      mediaType: "audio",
+      mediaUrl: "https://cdn.whazing.com/audio.ogg",
+      ticket: { id: 1, status: "pending" },
+    });
+    expect(ev?.message?.attachments).toHaveLength(1);
+    expect(ev?.message?.attachments[0]?.mediaType).toBe("audio");
+    expect(ev?.message?.attachments[0]?.mediaUrl).toBe(
+      "https://cdn.whazing.com/audio.ogg",
+    );
+  });
 });
 
 // normalizeWhazingEvent returns null only for malformed payloads; every fixture below is
