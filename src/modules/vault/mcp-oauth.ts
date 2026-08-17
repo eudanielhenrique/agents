@@ -153,11 +153,30 @@ export async function discoverOAuthServer(
     allowPrivate: opts.allowPrivate,
   });
   const origin = originOf(baseUrl);
+  const path = new URL(baseUrl).pathname.replace(/\/+$/, "");
 
-  const prm = await getJson<ProtectedResourceMetadata>(
-    `${origin}/.well-known/oauth-protected-resource`,
-    opts,
-  );
+  // RFC 9728 §3.1: a resource server mounted at a non-root path (e.g. Meta's MCP server, one
+  // origin hosting /ads, /commerce, ...) publishes its metadata at
+  // .well-known/oauth-protected-resource{path}, not the bare origin. Try the path-suffixed form
+  // first and fall back to the origin-root form for servers that publish there instead.
+  const candidates =
+    path.length > 0
+      ? [
+          `${origin}/.well-known/oauth-protected-resource${path}`,
+          `${origin}/.well-known/oauth-protected-resource`,
+        ]
+      : [`${origin}/.well-known/oauth-protected-resource`];
+  let prm: ProtectedResourceMetadata | undefined;
+  let lastErr: unknown;
+  for (const url of candidates) {
+    try {
+      prm = await getJson<ProtectedResourceMetadata>(url, opts);
+      break;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  if (!prm) throw lastErr;
   const resource = prm.resource ?? baseUrl;
   const issuer = prm.authorization_servers?.[0];
   if (!issuer) {
@@ -168,10 +187,27 @@ export async function discoverOAuthServer(
     );
   }
 
-  const asm = await getJson<AuthServerMetadata>(
-    `${originOf(issuer)}/.well-known/oauth-authorization-server`,
-    opts,
-  );
+  // Same RFC 8414 §3.1 path-suffix convention as the protected-resource lookup above — the
+  // issuer URL's path (when present) is appended to the well-known segment.
+  const issuerPath = new URL(issuer).pathname.replace(/\/+$/, "");
+  const asmCandidates =
+    issuerPath.length > 0
+      ? [
+          `${originOf(issuer)}/.well-known/oauth-authorization-server${issuerPath}`,
+          `${originOf(issuer)}/.well-known/oauth-authorization-server`,
+        ]
+      : [`${originOf(issuer)}/.well-known/oauth-authorization-server`];
+  let asm: AuthServerMetadata | undefined;
+  let asmErr: unknown;
+  for (const url of asmCandidates) {
+    try {
+      asm = await getJson<AuthServerMetadata>(url, opts);
+      break;
+    } catch (e) {
+      asmErr = e;
+    }
+  }
+  if (!asm) throw asmErr;
   if (!asm.authorization_endpoint || !asm.token_endpoint) {
     throw new AppError(
       "authorization-server metadata is missing endpoints",
