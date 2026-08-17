@@ -163,6 +163,12 @@ export async function runWhazingAgentTurn(
   ) {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
+  // Mark IMMEDIATELY (zero `await` between the check above and this call) — marking only right
+  // before graph.invoke left a wide gap (loadAgentConfig, the conv upsert, STT, buildToolset all
+  // await) where a second delivery's wait-loop could pass its own check before the first delivery
+  // ever marked, defeating the guard for two messages arriving close together. Every early return
+  // between here and the graph.invoke try/finally below must clear this explicitly.
+  markTurnInFlight(threadId);
 
   // Load agent config. instanceId=0 prevents accidental matches in Chatwoot tables;
   // conversationId=ticketId is a no-match placeholder — conv will be null, so contact/inbox prompt
@@ -188,7 +194,10 @@ export async function runWhazingAgentTurn(
       { overrides: promptVars ? { promptVars } : undefined },
     ),
   );
-  if (!loaded) return "no-agent";
+  if (!loaded) {
+    clearTurnInFlight(threadId);
+    return "no-agent";
+  }
 
   // Upsert the conversation mirror so the Conversations page shows this ticket.
   // Done before the flow context so the trail markers get the right conversationId.
@@ -263,7 +272,10 @@ export async function runWhazingAgentTurn(
   }
 
   const text = renderWhazingMessage(event, transcription);
-  if (!text) return "skipped";
+  if (!text) {
+    clearTurnInFlight(threadId);
+    return "skipped";
+  }
 
   // buildToolset with Whazing-native tools. The ctx.client cast is safe: buildToolset
   // uses it only for slow-tool acks (sendMessage + toggleTyping — both in InboxReplyClient).
@@ -316,7 +328,6 @@ export async function runWhazingAgentTurn(
     tools,
   });
 
-  markTurnInFlight(threadId);
   try {
     const result = await graph.invoke(
       { messages: [new HumanMessage(text)] },
