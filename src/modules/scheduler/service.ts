@@ -24,7 +24,8 @@ export type SchedulerJobKind =
   | "HEARTBEAT"
   | "FLOWLOG_SWEEP"
   | "APPOINTMENT_REMINDER"
-  | "REDIRECT_FOLLOWUP";
+  | "REDIRECT_FOLLOWUP"
+  | "WHAZING_RECONCILE";
 
 export interface ClaimedJob {
   id: bigint;

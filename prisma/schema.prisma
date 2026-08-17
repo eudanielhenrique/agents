@@ -62,6 +62,7 @@ enum SchedulerJobKind {
   FLOWLOG_SWEEP
   APPOINTMENT_REMINDER
   REDIRECT_FOLLOWUP
+  WHAZING_RECONCILE
 }
 
 enum SchedulerJobStatus {
@@ -432,6 +433,9 @@ model WhazingConversation {
   // Whazing contact id + name (denormalized — no Contact FK for Whazing yet).
   contactId      Int?      @map("contact_id")
   contactName    String?   @map("contact_name")
+  // Phone number, used to reconcile ticket status against Whazing (which only exposes
+  // /showticket by contact phone, not by ticket id).
+  contactPhone   String?   @map("contact_phone")
   agentId        BigInt?   @map("agent_id")
   lastEventAt    DateTime? @map("last_event_at")
   lastInboundAt  DateTime? @map("last_inbound_at")

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { assertSafeOutboundUrl } from "@/lib/ssrf";
 import type { InboxReplyClient } from "@/lib/transport/inbox-client";
+import type { WhazingTicketStatus } from "./types";
 
 // Whazing API client. Implements InboxReplyClient for the shared agent runtime.
 //
@@ -14,7 +15,10 @@ import type { InboxReplyClient } from "@/lib/transport/inbox-client";
 //   POST {base}/updateticketinfo — update ticket status/user/queue
 //   POST {base}/updatequeue      — assign to queue
 //   POST {base}/updatetag        — set contact tags (array of tag IDs)
-//   POST {base}/showticket       — get ticket by number
+//   POST {base}/showticket       — get the CURRENT ticket for a contact. Despite the name,
+//                                  "number" is the contact's phone (not a ticket id/number) —
+//                                  {ticketId: ...} 500s. Returns the contact's latest ticket,
+//                                  which may be a newer ticket than the one you have in hand.
 //   POST {base}/updatecontact    — update contact fields
 //   GET  {base}/kanbanpro/boards               — list boards
 //   GET  {base}/kanbanpro/boards/:id/columns   — list columns of a board
@@ -173,6 +177,23 @@ export class WhazingClient implements InboxReplyClient {
     return this.request("GET", `/ticket/${ticketId}`);
   }
 
+  // Current ticket status for a contact (by phone), via /showticket. Returns null when Whazing
+  // has no contact for that phone (404 "Contato não encontrado") — that's a normal "nothing to
+  // reconcile" outcome, not an error.
+  async showTicketByPhone(
+    phone: string,
+  ): Promise<{ id: number; status: WhazingTicketStatus } | null> {
+    try {
+      const res = (await this.request("POST", "/showticket", {
+        number: phone,
+      })) as { id: number; status: WhazingTicketStatus };
+      return res;
+    } catch (e) {
+      if (e instanceof WhazingApiError && e.status === 404) return null;
+      throw e;
+    }
+  }
+
   // Assign to a human user via /updateticketinfo.
   assignTicketToUser(ticketId: number, userId: number): Promise<unknown> {
     return this.request("POST", "/updateticketinfo", { ticketId, userId });
@@ -199,7 +220,9 @@ export class WhazingClient implements InboxReplyClient {
 
   // Download a media file from a Whazing URL using the Bearer token.
   // Used by getWhazingConversationMedia to proxy attachments through our origin.
-  async downloadMedia(url: string): Promise<{ bytes: ArrayBuffer; contentType: string }> {
+  async downloadMedia(
+    url: string,
+  ): Promise<{ bytes: ArrayBuffer; contentType: string }> {
     const res = await this.fetchImpl(url, {
       headers: { Authorization: `Bearer ${this.config.apiKey}` },
       redirect: "error",
@@ -207,7 +230,8 @@ export class WhazingClient implements InboxReplyClient {
     });
     if (!res.ok) throw new WhazingApiError(res.status, `GET ${url} (media)`);
     const bytes = await res.arrayBuffer();
-    const contentType = res.headers.get("content-type") ?? "application/octet-stream";
+    const contentType =
+      res.headers.get("content-type") ?? "application/octet-stream";
     return { bytes, contentType };
   }
 
@@ -295,7 +319,9 @@ export class WhazingClient implements InboxReplyClient {
       ticketId,
       contents: {
         type: "list",
-        ...(params.headerText ? { header: { type: "text", text: params.headerText } } : {}),
+        ...(params.headerText
+          ? { header: { type: "text", text: params.headerText } }
+          : {}),
         body: { text: params.bodyText },
         action: { sections: params.sections, button: params.buttonText },
       },
@@ -335,7 +361,10 @@ export class WhazingClient implements InboxReplyClient {
   }
 
   // Prompts the customer to share their location.
-  sendLocationRequestMessage(ticketId: number, bodyText: string): Promise<unknown> {
+  sendLocationRequestMessage(
+    ticketId: number,
+    bodyText: string,
+  ): Promise<unknown> {
     return this.request("POST", "/apiplus", {
       ticketId,
       contents: {

@@ -4,7 +4,11 @@ import logger from "@/api/lib/logger";
 import basePrisma from "@/api/lib/prisma";
 import { getCheckpointer } from "@/graph/checkpointer";
 import { lastAssistantText } from "@/graph/graph";
-import { clearTurnInFlight, markTurnInFlight } from "@/graph/inflight";
+import {
+  clearTurnInFlight,
+  isTurnInFlight,
+  markTurnInFlight,
+} from "@/graph/inflight";
 import {
   buildCallbacks,
   buildModelAndGraph,
@@ -41,6 +45,7 @@ async function upsertWhazingConversation(
     assignedUserId: number | null;
     contactId: number | null;
     contactName: string | null;
+    contactPhone: string | null;
   },
 ): Promise<bigint> {
   if (ctx.tenantId === null) throw new AppError("tenant required", 400);
@@ -67,6 +72,7 @@ async function upsertWhazingConversation(
         assignedUserId: params.assignedUserId,
         contactId: params.contactId,
         contactName: params.contactName,
+        contactPhone: params.contactPhone,
         agentId: params.agentId,
         lastEventAt: now,
         lastInboundAt: now,
@@ -76,6 +82,7 @@ async function upsertWhazingConversation(
         assignedUserId: params.assignedUserId,
         contactId: params.contactId ?? undefined,
         contactName: params.contactName ?? undefined,
+        contactPhone: params.contactPhone ?? undefined,
         agentId: params.agentId,
         lastEventAt: now,
         lastInboundAt: now,
@@ -142,6 +149,21 @@ export async function runWhazingAgentTurn(
     ticketId,
   });
 
+  // Whazing has no debounce/coalescing wiring yet (unlike Chatwoot) — two WhatsApp messages sent
+  // moments apart (e.g. an image + its caption as separate webhook events) each spawn their own
+  // independent turn. Racing them produces two near-simultaneous LLM calls unaware of each other,
+  // which can generate near-identical or duplicate replies. Wait for the in-flight turn on this
+  // thread to clear so the second turn's history already includes the first turn's reply — the
+  // model then naturally avoids repeating itself. Capped so a stuck/crashed turn never strands a
+  // customer's message forever.
+  const inFlightWaitStartedAt = Date.now();
+  while (
+    isTurnInFlight(threadId) &&
+    Date.now() - inFlightWaitStartedAt < 30_000
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
   // Load agent config. instanceId=0 prevents accidental matches in Chatwoot tables;
   // conversationId=ticketId is a no-match placeholder — conv will be null, so contact/inbox prompt
   // vars would normally resolve empty (see loadAgentConfig). We DO have the real WhatsApp profile
@@ -183,6 +205,7 @@ export async function runWhazingAgentTurn(
       assignedUserId: event.assignedUserId,
       contactId: event.contact?.id ?? null,
       contactName: event.contact?.name ?? null,
+      contactPhone: event.contact?.phone ?? null,
     },
   ).catch((e) => {
     logger.warn(

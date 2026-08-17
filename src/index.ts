@@ -33,6 +33,10 @@ import {
   startOutboundWorker,
   stopOutboundWorker,
 } from "@/modules/webhooks/outbound/worker";
+import {
+  ensureAllWhazingReconciles,
+  registerWhazingReconcileHandler,
+} from "@/modules/whazing/reconcile";
 
 const MAX_PORT_ATTEMPTS = 10;
 
@@ -159,6 +163,7 @@ if (config.schedulerWorker.enabled) {
   registerFlowlogRetentionHandler();
   registerAppointmentReminderHandler();
   registerRedirectFollowUpHandlers();
+  registerWhazingReconcileHandler();
   startScheduler();
   // Arm the per-tenant execution-log retention sweep for every existing tenant (best-effort: a
   // boot-time DB outage just means the sweep arms on the next restart).
@@ -169,6 +174,11 @@ if (config.schedulerWorker.enabled) {
   // sweep's row is lost (DB reset, external truncate). Same best-effort discipline as above.
   void ensureAllTenantSweeps().catch((error) =>
     logger.warn({ error }, "Failed to arm follow-up sweeps"),
+  );
+  // Arm the per-tenant Whazing ticket-status reconciliation sweep for every tenant that has a
+  // Whazing instance connected. Same best-effort discipline as above.
+  void ensureAllWhazingReconciles().catch((error) =>
+    logger.warn({ error }, "Failed to arm Whazing reconcile sweeps"),
   );
 }
 
