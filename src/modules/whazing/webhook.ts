@@ -206,13 +206,29 @@ export async function processWhazingDelivery(
 
     // Intake routing + campaign tagging run once, on the first message we ever see for a ticket
     // (no WhazingConversation row yet) — every message after that is either already on the right
-    // queue or already covered by the takeover check above.
+    // queue or already covered by the takeover check above. The queue move this makes only takes
+    // effect on the NEXT webhook — this event's own queueId is stale until then — so THIS turn is
+    // routed from the return value, not from re-reading normalized.queueId.
     if (
       normalized.status === "pending" &&
       normalized.ticketId != null &&
       !(await isKnownTicket(base, tenantId, instanceId, normalized.ticketId))
     ) {
-      await runWhazingIntake({ tenantId, instanceId, event: normalized, base });
+      const routing = await runWhazingIntake({
+        tenantId,
+        instanceId,
+        event: normalized,
+        base,
+      });
+      if (routing.routedTo === "escalate") {
+        // Contact has prior history or was already answered — this ticket is not the bot's to
+        // take, including the very message that triggered this check.
+        await markProcessed(base, tenantId, deliveryRowId);
+        return;
+      }
+      if (routing.routedTo === "bot" && routing.botQueueId != null) {
+        normalized.queueId = routing.botQueueId;
+      }
     }
 
     const outcome = await runWhazingAgentTurn({

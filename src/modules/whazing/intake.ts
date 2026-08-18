@@ -92,20 +92,31 @@ export interface RunWhazingIntakeParams {
   base?: PrismaClient;
 }
 
+// Where the CURRENT triggering message ended up, so the caller can react before invoking the
+// agent turn for it — moving the ticket to a queue via the Whazing API only affects the NEXT
+// message; this event's own (already-received) queueId is stale until then, so the caller must
+// route this one turn explicitly instead of relying on it to reflect the move.
+export type WhazingIntakeRouting =
+  | { routedTo: "skipped" }
+  | { routedTo: "escalate" }
+  | { routedTo: "bot"; botQueueId: number | null };
+
 // Best-effort by design: every Whazing call is try/caught and logged, never thrown — a failure
 // here must not block the bot from answering the message that triggered it.
 export async function runWhazingIntake(
   params: RunWhazingIntakeParams,
-): Promise<void> {
+): Promise<WhazingIntakeRouting> {
   const base = params.base ?? basePrisma;
   const { tenantId, instanceId, event } = params;
   const ticketId = event.ticketId;
-  if (ticketId == null) return;
+  if (ticketId == null) return { routedTo: "skipped" };
 
   const inbox = await findIntakeInbox(base, tenantId, instanceId);
-  if (!inbox) return;
+  if (!inbox) return { routedTo: "skipped" };
 
   const client = await loadWhazingClient(tenantId, instanceId, base);
+  const botQueueId = inbox.botQueueId != null ? Number(inbox.botQueueId) : null;
+  let routing: WhazingIntakeRouting = { routedTo: "bot", botQueueId };
 
   const phone = event.contact?.phone;
   if (phone) {
@@ -117,14 +128,16 @@ export async function runWhazingIntake(
         currentFromHistory?.answered === true ||
         ticketHasHumanReply(await client.getTicket(ticketId));
 
-      const targetQueueId =
-        hasPriorHistory || alreadyAnswered
-          ? inbox.intake.escalateQueueId
-          : inbox.botQueueId != null
-            ? Number(inbox.botQueueId)
-            : null;
-      if (targetQueueId != null) {
-        await client.assignTicketToQueue(ticketId, targetQueueId);
+      if (hasPriorHistory || alreadyAnswered) {
+        routing = { routedTo: "escalate" };
+        if (inbox.intake.escalateQueueId != null) {
+          await client.assignTicketToQueue(
+            ticketId,
+            inbox.intake.escalateQueueId,
+          );
+        }
+      } else if (botQueueId != null) {
+        await client.assignTicketToQueue(ticketId, botQueueId);
       }
     } catch (e) {
       logger.warn(
@@ -166,4 +179,6 @@ export async function runWhazingIntake(
       }
     }
   }
+
+  return routing;
 }
