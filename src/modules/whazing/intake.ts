@@ -116,7 +116,11 @@ export async function runWhazingIntake(
 
   const client = await loadWhazingClient(tenantId, instanceId, base);
   const botQueueId = inbox.botQueueId != null ? Number(inbox.botQueueId) : null;
-  let routing: WhazingIntakeRouting = { routedTo: "bot", botQueueId };
+  // Fail CLOSED, not open: if the history/already-answered check cannot be completed, we do not
+  // know whether a human already owns this ticket, so the safe default is to let the bot sit this
+  // turn out (not to answer as if it were a confirmed-fresh ticket). isKnownTicket stays false
+  // (no WhazingConversation row gets created on "skipped"), so the next message retries this check.
+  let routing: WhazingIntakeRouting = { routedTo: "skipped" };
 
   const phone = event.contact?.phone;
   if (phone) {
@@ -136,15 +140,27 @@ export async function runWhazingIntake(
             inbox.intake.escalateQueueId,
           );
         }
-      } else if (botQueueId != null) {
-        await client.assignTicketToQueue(ticketId, botQueueId);
+      } else {
+        routing = { routedTo: "bot", botQueueId };
+        if (botQueueId != null) {
+          await client.assignTicketToQueue(ticketId, botQueueId);
+        }
       }
     } catch (e) {
       logger.warn(
-        { ticketId, error: e },
-        "whazing intake: routing check failed (non-fatal)",
+        {
+          ticketId,
+          error: e instanceof Error ? { message: e.message, name: e.name } : e,
+        },
+        "whazing intake: routing check failed — skipping this turn (fail closed)",
       );
     }
+  } else {
+    // No phone on the event — cannot run the history check either; same fail-closed default.
+    logger.warn(
+      { ticketId },
+      "whazing intake: no contact phone on event — skipping this turn",
+    );
   }
 
   if (event.campaignSignal) {

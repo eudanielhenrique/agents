@@ -220,13 +220,14 @@ export async function processWhazingDelivery(
         event: normalized,
         base,
       });
-      if (routing.routedTo === "escalate") {
-        // Contact has prior history or was already answered — this ticket is not the bot's to
-        // take, including the very message that triggered this check.
+      if (routing.routedTo === "escalate" || routing.routedTo === "skipped") {
+        // "escalate": contact has prior history or was already answered — not the bot's ticket.
+        // "skipped": the check itself failed — fail closed rather than answer on an unknown state.
+        // Either way, no WhazingConversation row exists yet, so the next message retries this.
         await markProcessed(base, tenantId, deliveryRowId);
         return;
       }
-      if (routing.routedTo === "bot" && routing.botQueueId != null) {
+      if (routing.botQueueId != null) {
         normalized.queueId = routing.botQueueId;
       }
     }
