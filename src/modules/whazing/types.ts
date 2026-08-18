@@ -56,6 +56,9 @@ export interface NormalizedWhazingEvent {
   // ID of the assigned human agent; non-null means a human owns this ticket — bot must not reply.
   assignedUserId: number | null;
   status: WhazingTicketStatus | null;
+  // How an outbound (fromMe) message was sent — "bot"/"smartreception" mark our own/Whazing's
+  // automated sends; anything else (including absent) is a human typing directly in Whazing.
+  sendType: string | null;
   contact: NormalizedWhazingContact | null;
   message: NormalizedWhazingMessage | null;
 }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+  isManualHumanReply,
   isNewIncomingMessage,
   normalizeWhazingEvent,
   shouldWhazingBotHandle,
@@ -369,5 +370,49 @@ describe("shouldWhazingBotHandle", () => {
       status: "pending",
     });
     expect(shouldWhazingBotHandle(ev)).toBe(false);
+  });
+});
+
+// ── isManualHumanReply ────────────────────────────────────────────────────────
+
+describe("isManualHumanReply", () => {
+  const outbound = (over: Record<string, unknown>) =>
+    mustNormalize({
+      event: "message_received",
+      ticketId: 1,
+      status: "pending",
+      message: { body: "já te atendo", fromMe: true },
+      ...over,
+    });
+
+  test("returns true for a human typing directly in Whazing (no sendType)", () => {
+    expect(isManualHumanReply(outbound({}))).toBe(true);
+  });
+
+  test("returns true for a sendType that isn't bot/smartreception", () => {
+    expect(isManualHumanReply(outbound({ sendType: "app" }))).toBe(true);
+  });
+
+  test("returns false for our own bot send", () => {
+    expect(isManualHumanReply(outbound({ sendType: "bot" }))).toBe(false);
+  });
+
+  test("returns false for Whazing's own automation send", () => {
+    expect(isManualHumanReply(outbound({ sendType: "smartreception" }))).toBe(
+      false,
+    );
+  });
+
+  test("returns false when fromMe is false (customer message)", () => {
+    expect(
+      isManualHumanReply(outbound({ message: { body: "oi", fromMe: false } })),
+    ).toBe(false);
+  });
+
+  test("returns false when isAutomation is true (Typebot loop, not a person)", () => {
+    const ev = outbound({
+      message: { body: "bot", fromMe: true, typebotId: "t1" },
+    });
+    expect(isManualHumanReply(ev)).toBe(false);
   });
 });

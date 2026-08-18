@@ -5,6 +5,7 @@ import { AppError, UnauthorizedError } from "@/lib/errors";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
 import { resolveInstanceByRouteToken } from "./instance";
 import {
+  isManualHumanReply,
   isNewIncomingMessage,
   normalizeWhazingEvent,
   shouldWhazingBotHandle,
@@ -155,10 +156,34 @@ export async function processWhazingDelivery(
   if (claimed.count === 0) return;
 
   try {
+    // A human agent typing directly in Whazing. Record it and stop — this message itself is not
+    // for the bot to act on, but every customer message that follows must see the takeover.
+    if (isManualHumanReply(normalized) && normalized.ticketId != null) {
+      await recordHumanTakeover(
+        base,
+        tenantId,
+        instanceId,
+        normalized.ticketId,
+      );
+      await markProcessed(base, tenantId, deliveryRowId);
+      return;
+    }
+
     // Double-gate: skip events that carry no actionable customer message.
     if (
       !isNewIncomingMessage(normalized) ||
       !shouldWhazingBotHandle(normalized)
+    ) {
+      await markProcessed(base, tenantId, deliveryRowId);
+      return;
+    }
+
+    // The live event (queueId/assignedUserId) can lag a human takeover — Whazing's own queue move
+    // is driven by an external automation with its own round-trip. This local flag is the fast
+    // path that closes that race.
+    if (
+      normalized.ticketId != null &&
+      (await hasHumanTakenOver(base, tenantId, instanceId, normalized.ticketId))
     ) {
       await markProcessed(base, tenantId, deliveryRowId);
       return;
@@ -188,6 +213,41 @@ export async function processWhazingDelivery(
     );
     // Leave in PROCESSING — reaper will reset to PENDING for retry.
   }
+}
+
+// A human just typed directly in Whazing. Whazing's own queue move away from the bot's queue is
+// driven by an external automation (n8n) — this local flag is the synchronous signal, checked
+// before the very next customer message reaches the bot, so we don't depend on that round-trip
+// landing in time.
+async function recordHumanTakeover(
+  base: PrismaClient,
+  tenantId: bigint,
+  instanceId: bigint,
+  ticketId: number,
+): Promise<void> {
+  await runScopedOn(base, sysCtx(tenantId), (db) =>
+    db.whazingConversation.updateMany({
+      where: { tenantId, instanceId, ticketId },
+      data: { humanTakeoverAt: new Date() },
+    }),
+  );
+}
+
+async function hasHumanTakenOver(
+  base: PrismaClient,
+  tenantId: bigint,
+  instanceId: bigint,
+  ticketId: number,
+): Promise<boolean> {
+  const row = await runScopedOn(base, sysCtx(tenantId), (db) =>
+    db.whazingConversation.findUnique({
+      where: {
+        tenantId_instanceId_ticketId: { tenantId, instanceId, ticketId },
+      },
+      select: { humanTakeoverAt: true },
+    }),
+  );
+  return row?.humanTakeoverAt != null;
 }
 
 async function markProcessed(

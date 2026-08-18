@@ -435,6 +435,12 @@ model WhazingConversation {
   status         String    @default("open")
   // Whazing user id of the human currently assigned; null = bot handling.
   assignedUserId Int?      @map("assigned_user_id")
+  // Set the instant a human types directly in Whazing (fromMe, non-bot sendType) while the bot's
+  // queue still owns the ticket. Whazing's own queue move happens out of band (n8n) and can lag
+  // behind the customer's next message; this is checked synchronously so the bot never answers on
+  // top of a human who just took over. Non-null is permanent for the ticket's lifetime — nothing
+  // currently clears it (a fresh takeover always means a fresh ticketId in practice).
+  humanTakeoverAt DateTime? @map("human_takeover_at")
   // Whazing contact id + name (denormalized — no Contact FK for Whazing yet).
   contactId      Int?      @map("contact_id")
   contactName    String?   @map("contact_name")

@@ -111,6 +111,7 @@ export function normalizeWhazingEvent(
   const ticketId =
     coerceNum(r.ticketId) ?? coerceNum(ticket?.id) ?? coerceNum(r.id);
   const queueId = coerceNum(r.queueId) ?? coerceNum(ticket?.queueId);
+  const sendType = str(r.sendType);
 
   // assignedUserId: prefer explicit fields; ignore `user` object (may be the bot itself).
   const assignedUserId =
@@ -158,7 +159,16 @@ export function normalizeWhazingEvent(
     message = null;
   }
 
-  return { event, ticketId, queueId, assignedUserId, status, contact, message };
+  return {
+    event,
+    ticketId,
+    queueId,
+    assignedUserId,
+    status,
+    sendType,
+    contact,
+    message,
+  };
 }
 
 // Returns true when the event is a new message from the customer that the bot should evaluate.
@@ -186,5 +196,19 @@ export function shouldWhazingBotHandle(event: NormalizedWhazingEvent): boolean {
   if (msg.isAutomation) return false;
   if (event.assignedUserId != null) return false;
   if (event.status === "closed") return false;
+  return true;
+}
+
+// A human typed directly in Whazing (not through our API, not Whazing's own automation) — the
+// ticket's queue hasn't necessarily caught up yet (that move happens out of band, in n8n), so this
+// is the earliest and only reliable local signal that a human just took over. "bot"/"smartreception"
+// are the sendType values Whazing stamps on messages sent through an API key or its own automation;
+// anything else (including missing) is a human agent's app/console.
+export function isManualHumanReply(event: NormalizedWhazingEvent): boolean {
+  const msg = event.message;
+  if (!msg?.fromMe) return false;
+  if (msg.isAutomation) return false;
+  if (event.sendType && /^(bot|smartreception)$/.test(event.sendType))
+    return false;
   return true;
 }

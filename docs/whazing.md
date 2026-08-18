@@ -84,6 +84,31 @@ Flow:
 
 `whazingDeliveryId(messageId, rawBody)` — deterministic delivery key (messageId or SHA-256 fallback).
 
+### Human takeover (`WhazingConversation.humanTakeoverAt`)
+
+The gate above is stateless — it trusts whatever `assignedUserId`/`status` came inline on THIS
+webhook payload. Queue reassignment away from the bot (e.g. a human answering a ticket while it
+still sits in the bot's queue) is driven by an external automation (n8n, per-instance), which
+reads the same webhook stream and calls the Whazing API to move the ticket — a round-trip that can
+lag behind the customer's very next message. A message that lands before that move completes still
+carries the bot's queue, passes the stateless gate, and gets answered on top of the human.
+
+`processWhazingDelivery` (`webhook.ts`) closes that gap locally, without depending on the
+automation's timing:
+
+1. `isManualHumanReply(event)` — `fromMe ∧ !isAutomation ∧ sendType ∉ {bot, smartreception}`. True
+   only for a human typing directly in Whazing (not our own API send, not Whazing's own
+   auto-reply). On a match, `WhazingConversation.humanTakeoverAt` is stamped for that ticket and
+   nothing else happens — this message itself is not for the bot to act on.
+2. Every subsequent inbound customer message additionally checks that stored flag before invoking
+   the agent turn, on top of the stateless gate.
+
+`humanTakeoverAt` is permanent once set — nothing currently clears it (a real handback would need a
+fresh `ticketId`, which n8n's own "already answered" routing already keeps out of the bot's queue).
+`sendType` is read straight off the webhook payload; `"bot"`/`"smartreception"` are the values
+Whazing stamps on API-key sends and its own automation respectively — anything else, including
+absent, is treated as a human.
+
 ## Thread / memory keys (`src/modules/whazing/thread-keys.ts`)
 
 The LangGraph thread key must survive ticket close/reopen. The preferred key is contact + channel (WhatsApp sender ID):
