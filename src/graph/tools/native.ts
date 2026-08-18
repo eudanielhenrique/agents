@@ -1268,6 +1268,13 @@ export function buildNativeTools(
       "request_payment",
       "Send a payment-request card for a specific amount.",
     ),
+    // Whazing's contact-level extraInfo mechanism has no Chatwoot equivalent — Chatwoot already
+    // has set_custom_attribute for structured per-conversation/contact data, so this stays a
+    // declining stub here rather than a real (redundant) implementation.
+    unsupportedOnChatwootTool(
+      "save_anamnesis_data",
+      "Save patient intake/anamnesis fields.",
+    ),
   ];
   if (!allowed) return all;
   const allow = new Set(allowed);

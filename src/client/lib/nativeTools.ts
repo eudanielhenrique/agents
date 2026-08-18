@@ -5,6 +5,7 @@ import {
   BellOff,
   Calculator,
   CheckCircle2,
+  ClipboardList,
   Clock,
   GalleryHorizontal,
   Image as ImageIcon,
@@ -44,6 +45,7 @@ export const NATIVE_TOOL_ICONS: Record<string, LucideIcon> = {
   send_carousel_message: GalleryHorizontal,
   send_pix_button: QrCode,
   request_payment: Banknote,
+  save_anamnesis_data: ClipboardList,
 };
 
 export interface NativeToolMeta {
@@ -216,6 +218,15 @@ export function nativeToolMeta(name: string, t: TFunction): NativeToolMeta {
         description: t(
           "nativeTools.request_payment.desc",
           "Send a payment-request card for a specific amount, payable via the configured PIX key.",
+        ),
+      };
+    case "save_anamnesis_data":
+      return {
+        icon,
+        label: t("nativeTools.save_anamnesis_data.label", "Save intake data"),
+        description: t(
+          "nativeTools.save_anamnesis_data.desc",
+          "Save patient intake/anamnesis fields as they come up in the conversation (Whazing only).",
         ),
       };
     default:

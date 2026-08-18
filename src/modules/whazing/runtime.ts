@@ -272,10 +272,24 @@ export async function runWhazingAgentTurn(
     }
   }
 
-  const text = renderWhazingMessage(event, transcription);
+  let text = renderWhazingMessage(event, transcription);
   if (!text) {
     clearTurnInFlight(threadId);
     return "skipped";
+  }
+
+  // Surface already-collected intake/anamnesis data (contact.extraInfo, written by
+  // save_anamnesis_data) so the model sees what it already knows and does not re-ask — this is
+  // the concrete fix for "the agent keeps repeating questions it already got answers to".
+  // Best-effort: a failed fetch just means this turn runs without the reminder, never blocks it.
+  if (event.contact?.id != null) {
+    const contact = await client.getContact(event.contact.id).catch(() => null);
+    if (contact && contact.extraInfo.length > 0) {
+      const known = contact.extraInfo
+        .map((f) => `${f.name}: ${f.value}`)
+        .join("; ");
+      text = `[Dados já coletados sobre este paciente — NÃO pergunte de novo: ${known}]\n\n${text}`;
+    }
   }
 
   // buildToolset with Whazing-native tools. The ctx.client cast is safe: buildToolset

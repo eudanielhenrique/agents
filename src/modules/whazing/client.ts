@@ -21,7 +21,8 @@ import type { WhazingTicketStatus } from "./types";
 //                                  which may be a newer ticket than the one you have in hand.
 //   POST {base}/showallticket    — every ticket ever opened for a contact (by phone) — the history
 //                                  check for intake routing.
-//   POST {base}/updatecontact    — update contact fields
+//   POST {base}/contact          — get a contact (id/name/extraInfo/…)
+//   POST {base}/updatecontact    — update contact fields, incl. extraInfo (structured key/value)
 //   GET  {base}/kanbanpro/boards               — list boards
 //   GET  {base}/kanbanpro/boards/:id/columns   — list columns of a board
 //   POST {base}/kanbanpro/card                 — create or move card (action: create_or_move)
@@ -232,6 +233,39 @@ export class WhazingClient implements InboxReplyClient {
       if (e instanceof WhazingApiError && e.status === 404) return [];
       throw e;
     }
+  }
+
+  // Fetch a contact by id, via /contact. Used to read the CURRENT extraInfo before merging in new
+  // fields — /updatecontact's example payload sends the whole extraInfo array, with no sign of a
+  // partial-merge server side, so a naive write would wipe out anything not passed back.
+  async getContact(contactId: number): Promise<{
+    id: number;
+    name: string | null;
+    extraInfo: Array<{ name: string; value: string }>;
+  } | null> {
+    try {
+      const res = (await this.request("POST", "/contact", {
+        contactId,
+      })) as {
+        id: number;
+        name: string | null;
+        extraInfo?: Array<{ name: string; value: string }> | null;
+      };
+      return { id: res.id, name: res.name, extraInfo: res.extraInfo ?? [] };
+    } catch (e) {
+      if (e instanceof WhazingApiError && e.status === 404) return null;
+      throw e;
+    }
+  }
+
+  // Update a contact's extraInfo (structured key/value fields — anamnesis data, etc.) via
+  // /updatecontact. TENTATIVE: verify against a live instance that this fully replaces extraInfo
+  // rather than merging server-side; callers should fetch+merge (see save_anamnesis_data) either way.
+  updateContactExtraInfo(
+    contactId: number,
+    extraInfo: Array<{ name: string; value: string }>,
+  ): Promise<unknown> {
+    return this.request("POST", "/updatecontact", { contactId, extraInfo });
   }
 
   // Assign to a human user via /updateticketinfo.

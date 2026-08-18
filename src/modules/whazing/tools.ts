@@ -129,6 +129,56 @@ function privateNoteTool(ctx: WhazingToolCtx) {
   );
 }
 
+// Persists structured intake/anamnesis fields on the Whazing CONTACT (extraInfo), not the ticket —
+// survives across tickets for the same contact, and is read back at the start of every turn
+// (see runtime.ts) so the model sees what it already knows instead of re-asking. /updatecontact's
+// documented example sends the whole extraInfo array with no sign of a server-side partial merge,
+// so this fetches the current contact first and merges client-side (upsert by field name) rather
+// than trusting a partial write to leave the rest alone.
+function saveAnamnesisDataTool(ctx: WhazingToolCtx) {
+  return tool(
+    async ({ fields }: { fields: { name: string; value: string }[] }) => {
+      if (ctx.contactId == null) {
+        return "No contact id available for this ticket — cannot save.";
+      }
+      try {
+        const current = await ctx.client.getContact(ctx.contactId);
+        const merged = new Map(
+          (current?.extraInfo ?? []).map((f) => [f.name, f.value]),
+        );
+        for (const f of fields) merged.set(f.name, f.value);
+        await ctx.client.updateContactExtraInfo(
+          ctx.contactId,
+          Array.from(merged, ([name, value]) => ({ name, value })),
+        );
+        return "Saved.";
+      } catch (e) {
+        logger.warn(
+          "whazing save_anamnesis_data failed (contact=%s): %s",
+          String(ctx.contactId),
+          e instanceof Error ? e.message : String(e),
+        );
+        return "Could not save right now — continue the conversation, the operator can still read your notes in the transcript.";
+      }
+    },
+    {
+      name: "save_anamnesis_data",
+      description:
+        'Save one or more pieces of patient intake/anamnesis data as they come up in the conversation (e.g. {name:"Motivo",value:"Dor de cabeça recorrente"}, {name:"Duração",value:"3 dias"}). Call this RIGHT AFTER the patient answers each question — do not wait until the end. Existing fields with the same name are overwritten; anything not mentioned here is left alone.',
+      schema: z.object({
+        fields: z
+          .array(
+            z.object({
+              name: z.string().min(1),
+              value: z.string().min(1),
+            }),
+          )
+          .min(1),
+      }),
+    },
+  );
+}
+
 function resolveConversationTool(ctx: WhazingToolCtx) {
   return tool(
     async () => {
@@ -655,6 +705,7 @@ export const WHAZING_NATIVE_TOOL_NAMES = [
   "send_carousel_message",
   "send_pix_button",
   "request_payment",
+  "save_anamnesis_data",
 ] as const;
 
 export type WhazingNativeToolName = (typeof WHAZING_NATIVE_TOOL_NAMES)[number];
@@ -677,6 +728,7 @@ export function buildWhazingNativeTools(
     sendCarouselMessageTool(ctx),
     sendPixButtonTool(ctx),
     requestPaymentTool(ctx),
+    saveAnamnesisDataTool(ctx),
   ];
   if (!allowed) return all;
   const allow = new Set(allowed);

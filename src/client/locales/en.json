@@ -1557,6 +1557,10 @@
       "desc": "Mark the conversation as resolved when the request is fully handled.",
       "label": "Resolve"
     },
+    "save_anamnesis_data": {
+      "desc": "Save patient intake/anamnesis fields as they come up in the conversation (Whazing only).",
+      "label": "Save intake data"
+    },
     "send_button_message": {
       "desc": "Send up to 3 quick-reply buttons the customer can tap instead of typing.",
       "label": "Send buttons"

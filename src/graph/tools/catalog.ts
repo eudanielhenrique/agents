@@ -22,6 +22,7 @@ export const NATIVE_TOOL_NAMES = [
   "send_carousel_message",
   "send_pix_button",
   "request_payment",
+  "save_anamnesis_data",
 ] as const;
 export type NativeToolName = (typeof NATIVE_TOOL_NAMES)[number];
 
@@ -50,6 +51,7 @@ export const NATIVE_TOOL_CATEGORY: Record<NativeToolName, NativeToolCategory> =
     send_carousel_message: "conversation",
     send_pix_button: "conversation",
     request_payment: "conversation",
+    save_anamnesis_data: "conversation",
   };
 
 export const UTILITY_NATIVE_TOOL_NAMES = NATIVE_TOOL_NAMES.filter(
@@ -93,6 +95,7 @@ export const NATIVE_TOOL_RISK: Record<NativeToolName, RiskTier> = {
   // Money-adjacent: sends the operator-configured PIX key / requests a payment.
   send_pix_button: "medium",
   request_payment: "medium",
+  save_anamnesis_data: "low",
 };
 
 export const RAG_TOOL_RISK: Record<RagToolName, RiskTier> = {

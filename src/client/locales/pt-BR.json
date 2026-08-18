@@ -1562,6 +1562,10 @@
       "desc": "Marca a conversa como resolvida quando o pedido foi totalmente atendido.",
       "label": "Resolver"
     },
+    "save_anamnesis_data": {
+      "desc": "Salva dados de anamnese/triagem do paciente conforme surgem na conversa (só Whazing).",
+      "label": "Salvar dados de triagem"
+    },
     "send_button_message": {
       "desc": "Envia até 3 botões de resposta rápida que o cliente pode tocar em vez de digitar.",
       "label": "Enviar botões"

@@ -190,7 +190,19 @@ tenant:<tenantId>:whazing:<instanceId>:ticket:<ticketId>
 | `calculator` | exact arithmetic |
 | `get_current_time` | current datetime in agent timezone |
 
-Chatwoot-specific tools (`set_custom_attribute`, `assign_label`, `kanban_*`, `set_voice_preference`, `react_to_message`) are **not** exposed for Whazing agents — they rely on Chatwoot API endpoints unavailable in Whazing.
+Chatwoot-specific tools (`set_custom_attribute`, `assign_label`, `set_voice_preference`, `react_to_message`) are **not** exposed for Whazing agents — they rely on Chatwoot API endpoints unavailable in Whazing. The reverse also exists: `send_button_message`/`send_list_message`/`send_carousel_message`/`send_pix_button`/`request_payment`/`save_anamnesis_data` are Whazing-only capabilities, stubbed as a declining "not available on Chatwoot" tool in `src/graph/tools/native.ts` (`unsupportedOnChatwootTool`) so a Chatwoot-attached agent that somehow has one granted gets a clear message instead of the tool silently not existing — and so `buildNativeTools`'s own test (every catalog name must be buildable) still holds.
+
+### `save_anamnesis_data` — structured intake data + the anti-repeat mechanism
+
+Persists patient intake/anamnesis fields on the Whazing **contact** (`extraInfo`, via `/updatecontact`) — not the ticket, so it survives across that contact's tickets. `WhazingClient.getContact`/`updateContactExtraInfo` fetch-then-merge client-side (upsert by field `name`) rather than trusting a partial write, since `/updatecontact`'s documented example sends the whole `extraInfo` array with no sign of a server-side partial merge.
+
+The other half of the fix is in `runtime.ts`: every turn fetches the contact's current `extraInfo` (best-effort) and prepends a `[Dados já coletados... NÃO pergunte de novo: ...]` block to the message text before it reaches the model — the concrete fix for "the agent keeps asking the same anamnesis questions it already got answered." The system prompt still has to instruct the model to actually call the tool as answers come in; this only supplies the grounding once it does.
+
+### Self-echo (bot-send-tracker.ts) — do not confuse our own reply for a human
+
+`isManualHumanReply` (normalize.ts) originally trusted `sendType` alone to tell a human typing directly in Whazing apart from the echo of our own sent reply. That assumption turned out false in production — Whazing doesn't reliably stamp `sendType` as `"bot"`/`"smartreception"` on the echo of a message sent through our API — which self-silenced the bot right after its own first reply on some tickets (confirmed: a solo test conversation, no human involved, got `humanTakeoverAt` set ~14s after the bot's own message).
+
+`bot-send-tracker.ts` tracks OUR OWN sends instead — a signal we fully control. Every customer-facing send (`deliverReply`'s split-delivered reply, and every Whazing-native tool that messages the customer: `handoff_to_human`'s customer message, buttons/list/carousel, PIX button, payment request) calls `markBotSent(instanceId, ticketId)`; the takeover check in `webhook.ts` skips a `fromMe: true` event that arrives within that window (60s) regardless of what `sendType` says. In-memory, single-process — same invariant as `graph/inflight.ts`.
 
 ## Operator setup checklist
 
