@@ -49,6 +49,15 @@ export interface NormalizedWhazingContact {
   whatsappId: string | null;
 }
 
+// A WhatsApp "click-to-WhatsApp ad" (ctwa_ad) entry signal, read from the message's contextInfo
+// (buried in the webhook's raw `dataJson` blob — a different, deeper structure than the flat
+// message fields, so it is parsed separately from the rest of normalizeWhazingEvent).
+export interface WhazingCampaignSignal {
+  ctwaClid: string | null;
+  sourceId: string | null;
+  sourceApp: string | null;
+}
+
 export interface NormalizedWhazingEvent {
   event: WhazingHandledEvent | string;
   ticketId: number | null;
@@ -59,6 +68,8 @@ export interface NormalizedWhazingEvent {
   // How an outbound (fromMe) message was sent — "bot"/"smartreception" mark our own/Whazing's
   // automated sends; anything else (including absent) is a human typing directly in Whazing.
   sendType: string | null;
+  // Non-null when this inbound message carries a click-to-WhatsApp-ad entry signal.
+  campaignSignal: WhazingCampaignSignal | null;
   contact: NormalizedWhazingContact | null;
   message: NormalizedWhazingMessage | null;
 }

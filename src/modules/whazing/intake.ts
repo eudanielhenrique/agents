@@ -1,0 +1,169 @@
+// Whazing intake routing (n8n "recepção inteligente" parity, items 1+2): decide which queue a
+// BRAND NEW ticket belongs on (the bot's own queue vs the escalate queue, by prior history / already
+// answered) and tag + notify a campaign-sourced lead. Runs once, on the first message we ever see
+// for a ticket (no WhazingConversation row yet) — everything after that is covered by the existing
+// per-message gate (shouldWhazingBotHandle) and the humanTakeoverAt fast path in webhook.ts.
+//
+// Whazing has no queue-list / tag-list endpoint (confirmed against the official Postman
+// collection) — escalateQueueId/campaignTagId are raw ids the operator reads off the Whazing
+// dashboard, same as the existing handoff.whazingQueueId field.
+
+import type { PrismaClient } from "@/../generated/prisma/client";
+import logger from "@/api/lib/logger";
+import basePrisma from "@/api/lib/prisma";
+import { runScopedOn, type TenantContext } from "@/lib/tenancy";
+import { loadWhazingClient } from "./instance";
+import {
+  readWhazingIntakeConfig,
+  type WhazingIntakeConfig,
+} from "./intake-settings";
+import type { NormalizedWhazingEvent } from "./types";
+
+function sysCtx(tenantId: bigint): TenantContext {
+  return { tenantId, userId: null, role: "TENANT_ADMIN" };
+}
+
+interface IntakeInbox {
+  // The bot's own queue for this instance (WhazingInbox.whazingQueueId) — where a ticket with no
+  // history and not yet answered stays. String per schema; null = catch-all inbox (no queue move).
+  botQueueId: string | null;
+  intake: WhazingIntakeConfig;
+}
+
+// Finds the (assumed single) agent with whazingIntake.enabled for this instance. More than one is
+// a config mistake, not a crash — first one wins, logged.
+async function findIntakeInbox(
+  base: PrismaClient,
+  tenantId: bigint,
+  instanceId: bigint,
+): Promise<IntakeInbox | null> {
+  const rows = await runScopedOn(base, sysCtx(tenantId), (db) =>
+    db.whazingInbox.findMany({
+      where: { tenantId, instanceId, agentId: { not: null } },
+      select: { whazingQueueId: true, agent: { select: { settings: true } } },
+    }),
+  );
+  const candidates = rows
+    .map((r) => ({
+      botQueueId: r.whazingQueueId,
+      intake: readWhazingIntakeConfig(r.agent?.settings),
+    }))
+    .filter((r) => r.intake.enabled);
+  if (candidates.length > 1) {
+    logger.warn(
+      "whazing intake: more than one agent has whazingIntake.enabled for instance=%s tenant=%s — using the first",
+      String(instanceId),
+      String(tenantId),
+    );
+  }
+  return candidates[0] ?? null;
+}
+
+// Whazing's /ticket/:id return shape is `unknown` at the client boundary (see getTicket) — this
+// reads just the one field we need (mirrors n8n's `messages.some(m => m.fromMe === true)`).
+function ticketHasHumanReply(ticket: unknown): boolean {
+  if (!ticket || typeof ticket !== "object") return false;
+  const messages = (ticket as Record<string, unknown>).messages;
+  if (!Array.isArray(messages)) return false;
+  return messages.some(
+    (m) =>
+      m &&
+      typeof m === "object" &&
+      (m as Record<string, unknown>).fromMe === true,
+  );
+}
+
+// Shared with webhook.ts's humanTakeoverAt handling — the escalate queue is the same one item 1
+// uses for "already has history", so a manual takeover and a routing decision agree on where a
+// ticket lands.
+export async function resolveEscalateQueueId(
+  base: PrismaClient,
+  tenantId: bigint,
+  instanceId: bigint,
+): Promise<number | null> {
+  const inbox = await findIntakeInbox(base, tenantId, instanceId);
+  return inbox?.intake.escalateQueueId ?? null;
+}
+
+export interface RunWhazingIntakeParams {
+  tenantId: bigint;
+  instanceId: bigint;
+  event: NormalizedWhazingEvent;
+  base?: PrismaClient;
+}
+
+// Best-effort by design: every Whazing call is try/caught and logged, never thrown — a failure
+// here must not block the bot from answering the message that triggered it.
+export async function runWhazingIntake(
+  params: RunWhazingIntakeParams,
+): Promise<void> {
+  const base = params.base ?? basePrisma;
+  const { tenantId, instanceId, event } = params;
+  const ticketId = event.ticketId;
+  if (ticketId == null) return;
+
+  const inbox = await findIntakeInbox(base, tenantId, instanceId);
+  if (!inbox) return;
+
+  const client = await loadWhazingClient(tenantId, instanceId, base);
+
+  const phone = event.contact?.phone;
+  if (phone) {
+    try {
+      const history = await client.listTicketsByPhone(phone);
+      const hasPriorHistory = history.some((t) => t.id !== ticketId);
+      const currentFromHistory = history.find((t) => t.id === ticketId);
+      const alreadyAnswered =
+        currentFromHistory?.answered === true ||
+        ticketHasHumanReply(await client.getTicket(ticketId));
+
+      const targetQueueId =
+        hasPriorHistory || alreadyAnswered
+          ? inbox.intake.escalateQueueId
+          : inbox.botQueueId != null
+            ? Number(inbox.botQueueId)
+            : null;
+      if (targetQueueId != null) {
+        await client.assignTicketToQueue(ticketId, targetQueueId);
+      }
+    } catch (e) {
+      logger.warn(
+        { ticketId, error: e },
+        "whazing intake: routing check failed (non-fatal)",
+      );
+    }
+  }
+
+  if (event.campaignSignal) {
+    const contactId = event.contact?.id;
+    if (inbox.intake.campaignTagId != null && contactId != null) {
+      try {
+        await client.setContactTags(contactId, [
+          String(inbox.intake.campaignTagId),
+        ]);
+      } catch (e) {
+        logger.warn(
+          { ticketId, error: e },
+          "whazing intake: campaign tag failed (non-fatal)",
+        );
+      }
+    }
+    if (inbox.intake.campaignNotifyPhone) {
+      try {
+        const text = inbox.intake.campaignNotifyMessage.replace(
+          "{{ctwaClid}}",
+          event.campaignSignal.ctwaClid ?? "",
+        );
+        await client.sendMessageToNumber(
+          inbox.intake.campaignNotifyPhone,
+          text,
+        );
+      } catch (e) {
+        logger.warn(
+          { ticketId, error: e },
+          "whazing intake: campaign notify failed (non-fatal)",
+        );
+      }
+    }
+  }
+}

@@ -109,6 +109,45 @@ fresh `ticketId`, which n8n's own "already answered" routing already keeps out o
 Whazing stamps on API-key sends and its own automation respectively — anything else, including
 absent, is treated as a human.
 
+Alongside stamping the flag, `webhook.ts` also best-effort moves the ticket in Whazing itself
+(`assignTicketToQueue`, target = `agent.settings.whazingIntake.escalateQueueId` when configured) —
+`humanTakeoverAt` alone already stops the bot without it, so a failed/unconfigured move is not fatal.
+
+### Intake routing + campaign leads (`src/modules/whazing/intake.ts`)
+
+Parity with n8n's "recepção inteligente" flow's other two jobs (queue-by-history + campaign
+tag/notify) — ported in because n8n was found receiving a small fraction of the real webhook
+traffic our own receiver gets (measured live: 52 of our `message_received` deliveries against 2 n8n
+executions in the same 25-minute window), so the routing/tagging it drove only fired sporadically.
+
+Runs once, from `processWhazingDelivery`, on the first message we ever see for a ticket (no
+`WhazingConversation` row yet) and only while `status === "pending"`:
+
+1. **Routing.** `WhazingClient.listTicketsByPhone` (history, `POST /showallticket`) + `getTicket`
+   (current ticket's messages, for a `fromMe: true` human reply already on it) decide whether the
+   contact has prior history or this ticket was already answered. If so →
+   `assignTicketToQueue(ticketId, whazingIntake.escalateQueueId)`. Otherwise the ticket stays on the
+   bot's own queue (`WhazingInbox.whazingQueueId` — no separate field needed, it is the same row
+   that already routes this agent's messages).
+2. **Campaign signal.** `NormalizedWhazingEvent.campaignSignal` (built by
+   `normalize.ts#extractCampaignSignal`, parsed out of the webhook's raw `dataJson` blob — a
+   click-to-WhatsApp-ad `ctwa_ad` entry, read from `contextInfo`/`externalAdReply` under whichever
+   message-type key is present: `extendedTextMessage`/`imageMessage`/`videoMessage`/
+   `documentMessage`/`content`). When present: `setContactTags` with `whazingIntake.campaignTagId`
+   (if configured) and `sendMessageToNumber` to `whazingIntake.campaignNotifyPhone` with
+   `whazingIntake.campaignNotifyMessage` (`{{ctwaClid}}` interpolated).
+
+Every call is try/caught and logged — a failed routing or tagging attempt never blocks the bot from
+answering the message that triggered it. Config lives in `agent.settings.whazingIntake` (off by
+default; see `intake-settings.ts`), exposed in the editor's Tools tab and via MCP's
+`agent_settings_set`. **Whazing has no queue-list or tag-list endpoint** (confirmed against the
+official Postman collection — `/updatequeue`/`/updatetag` only apply an id you already know), so
+`escalateQueueId`/`campaignTagId` are typed by hand, same as `handoff.whazingQueueId`.
+
+If more than one agent on an instance has `whazingIntake.enabled`, the first one found wins (logged
+as a warning) — the feature assumes one intake-owning agent per instance, matching every production
+setup seen so far.
+
 ## Thread / memory keys (`src/modules/whazing/thread-keys.ts`)
 
 The LangGraph thread key must survive ticket close/reopen. The preferred key is contact + channel (WhatsApp sender ID):

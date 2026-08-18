@@ -4,6 +4,7 @@ import type {
   NormalizedWhazingContact,
   NormalizedWhazingEvent,
   NormalizedWhazingMessage,
+  WhazingCampaignSignal,
   WhazingTicketStatus,
 } from "./types";
 
@@ -23,6 +24,63 @@ function str(v: unknown): string | null {
 
 function num(v: unknown): number | null {
   return typeof v === "number" ? v : null;
+}
+
+// A click-to-WhatsApp-ad (ctwa_ad) entry signal lives in contextInfo, buried inside the webhook's
+// raw `dataJson` blob (a JSON STRING, a full WhatsApp protocol message — a different, deeper
+// structure than the flat message fields the rest of this file reads). Its exact position varies
+// by message type (text vs image vs video vs the flat "content" shape Whazing actually sends), so
+// every known variant is checked in order — mirrors the equivalent extraction already running in
+// production (n8n's "Analisar Sinal de Campanha" node) for this same webhook stream.
+function extractCampaignSignal(
+  dataJson: unknown,
+): WhazingCampaignSignal | null {
+  if (typeof dataJson !== "string" || dataJson === "") return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(dataJson);
+  } catch {
+    return null;
+  }
+  const message =
+    raw && typeof raw === "object"
+      ? ((raw as Record<string, unknown>).message as
+          | Record<string, unknown>
+          | undefined)
+      : undefined;
+  if (!message) return null;
+  const variants = [
+    "extendedTextMessage",
+    "imageMessage",
+    "videoMessage",
+    "documentMessage",
+    "content",
+  ] as const;
+  let contextInfo: Record<string, unknown> | undefined;
+  for (const key of variants) {
+    const variant = message[key];
+    if (variant && typeof variant === "object") {
+      const ci = (variant as Record<string, unknown>).contextInfo;
+      if (ci && typeof ci === "object") {
+        contextInfo = ci as Record<string, unknown>;
+        break;
+      }
+    }
+  }
+  if (!contextInfo) return null;
+  const adReply = contextInfo.externalAdReply;
+  const ad =
+    adReply && typeof adReply === "object"
+      ? (adReply as Record<string, unknown>)
+      : {};
+  const ctwaClid = str(ad.ctwaClid);
+  const isCtwaAd = str(contextInfo.entryPointConversionSource) === "ctwa_ad";
+  if (!isCtwaAd && !ctwaClid) return null;
+  return {
+    ctwaClid,
+    sourceId: str(ad.sourceId) ?? str(ad.sourceID),
+    sourceApp: str(ad.sourceApp),
+  };
 }
 
 function coerceNum(v: unknown): number | null {
@@ -112,6 +170,7 @@ export function normalizeWhazingEvent(
     coerceNum(r.ticketId) ?? coerceNum(ticket?.id) ?? coerceNum(r.id);
   const queueId = coerceNum(r.queueId) ?? coerceNum(ticket?.queueId);
   const sendType = str(r.sendType);
+  const campaignSignal = extractCampaignSignal(r.dataJson);
 
   // assignedUserId: prefer explicit fields; ignore `user` object (may be the bot itself).
   const assignedUserId =
@@ -166,6 +225,7 @@ export function normalizeWhazingEvent(
     assignedUserId,
     status,
     sendType,
+    campaignSignal,
     contact,
     message,
   };

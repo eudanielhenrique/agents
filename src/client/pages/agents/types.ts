@@ -62,3 +62,14 @@ export interface HandoffUiState {
   // Persisted in agent.settings.handoff.whazingQueueId.
   whazingQueueId: string;
 }
+
+// UI-side Whazing intake config (the editor's working copy). Numeric ids are strings in the form,
+// parsed on save. Persisted in agent.settings.whazingIntake — see
+// src/modules/whazing/intake-settings.ts.
+export interface WhazingIntakeUiState {
+  enabled: boolean;
+  escalateQueueId: string;
+  campaignTagId: string;
+  campaignNotifyPhone: string;
+  campaignNotifyMessage: string;
+}

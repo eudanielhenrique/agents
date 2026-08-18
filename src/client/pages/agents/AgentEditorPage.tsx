@@ -74,6 +74,7 @@ import {
   readGuardrailsConfig,
 } from "@/modules/guardrails/settings";
 import { DEFAULT_EXTRACTION_PROMPT } from "@/modules/vision/prompt-default";
+import { readWhazingIntakeConfig } from "@/modules/whazing/intake-settings";
 import { BehaviorTab, type SendImageState } from "./BehaviorTab";
 import {
   type ChannelRedirectFormState,
@@ -96,6 +97,7 @@ import type {
   ToolCatalog,
   ToolSelectionView,
   VaultEntry,
+  WhazingIntakeUiState,
   WhazingPixUiState,
 } from "./types";
 import { usePlaygroundChat } from "./usePlaygroundChat";
@@ -240,6 +242,22 @@ function serializeHandoff(h: HandoffUiState): {
   };
 }
 
+// Serialize the whazingIntake form back to the stored shape. The backend re-clamps every field
+// through readWhazingIntakeConfig, so an out-of-range/garbage value is corrected server-side.
+function serializeWhazingIntake(
+  w: WhazingIntakeUiState,
+): Record<string, unknown> {
+  const escalateQueueId = parseInt(w.escalateQueueId, 10);
+  const campaignTagId = parseInt(w.campaignTagId, 10);
+  return {
+    enabled: w.enabled,
+    escalateQueueId: Number.isNaN(escalateQueueId) ? null : escalateQueueId,
+    campaignTagId: Number.isNaN(campaignTagId) ? null : campaignTagId,
+    campaignNotifyPhone: w.campaignNotifyPhone.trim() || null,
+    campaignNotifyMessage: w.campaignNotifyMessage,
+  };
+}
+
 // Pure per-section readers: map a synced Agent into the editor's working state.
 // Shared by `applyAgent` (initial load / post-save) and the per-tab discard, so
 // reverting a section reproduces exactly what the last sync produced.
@@ -300,6 +318,18 @@ function readBehaviorState(a: Agent) {
       ? (rawPix as import("./types").WhazingPixUiState)
       : null;
 
+  // Whazing intake routing (queue-by-history + campaign tag/notify) — through the SAME typed
+  // reader the runtime uses, so the form always reflects clamped/defaulted values.
+  const wi = readWhazingIntakeConfig(s);
+  const whazingIntake: import("./types").WhazingIntakeUiState = {
+    enabled: wi.enabled,
+    escalateQueueId:
+      wi.escalateQueueId != null ? String(wi.escalateQueueId) : "",
+    campaignTagId: wi.campaignTagId != null ? String(wi.campaignTagId) : "",
+    campaignNotifyPhone: wi.campaignNotifyPhone ?? "",
+    campaignNotifyMessage: wi.campaignNotifyMessage,
+  };
+
   const ac = (s.attributeContext ?? {}) as Record<string, unknown>;
   const si = (s.sendImage ?? {}) as Record<string, unknown>;
 
@@ -311,6 +341,7 @@ function readBehaviorState(a: Agent) {
     kanbanInstructions: str(ka.instructions),
     kanbanWhazingBoard,
     whazingPix,
+    whazingIntake,
     customAttributeInstructions: str(tg.set_custom_attribute),
     labelInstructions: str(tg.assign_label),
     updateKanbanTaskInstructions: str(tg.update_kanban_task),
@@ -711,6 +742,15 @@ export function AgentEditorPage() {
   // PIX key/name/type for send_pix_button + request_payment (Tools-tab config, like kanban).
   // Persisted in agent.settings.whazingPix; synced only by syncToolConfig.
   const [whazingPix, setWhazingPix] = useState<WhazingPixUiState | null>(null);
+  // Whazing intake routing (queue-by-history + campaign tag/notify), Tools-tab config like kanban.
+  // Persisted in agent.settings.whazingIntake; synced only by syncToolConfig.
+  const [whazingIntake, setWhazingIntake] = useState<WhazingIntakeUiState>({
+    enabled: false,
+    escalateQueueId: "",
+    campaignTagId: "",
+    campaignNotifyPhone: "",
+    campaignNotifyMessage: "",
+  });
   // Operator usage guidance for set_custom_attribute + assign_label (Tools-tab config, like kanban).
   // Persisted in agent.settings.toolGuidance; synced only by syncToolConfig.
   const [customAttributeInstructions, setCustomAttributeInstructions] =
@@ -813,6 +853,7 @@ export function AgentEditorPage() {
     setKanbanInstructions(b.kanbanInstructions);
     setKanbanWhazingBoard(b.kanbanWhazingBoard ?? null);
     setWhazingPix(b.whazingPix ?? null);
+    setWhazingIntake(b.whazingIntake);
     setCustomAttributeInstructions(b.customAttributeInstructions);
     setLabelInstructions(b.labelInstructions);
     setUpdateKanbanTaskInstructions(b.updateKanbanTaskInstructions);
@@ -1855,6 +1896,7 @@ export function AgentEditorPage() {
         unknown
       >;
       const handoffJson = serializeHandoff(handoff);
+      const whazingIntakeJson = serializeWhazingIntake(whazingIntake);
       const kanbanJson: Record<string, unknown> = {
         instructions: kanbanInstructions.trim() || null,
         whazingBoard: kanbanWhazingBoard ?? null,
@@ -1892,6 +1934,7 @@ export function AgentEditorPage() {
           kanban: kanbanJson,
           toolGuidance: toolGuidanceJson,
           whazingPix: whazingPix ?? null,
+          whazingIntake: whazingIntakeJson,
         },
         ...(patchExpected ? { expectedUpdatedAt: patchExpected } : {}),
       });
@@ -1913,6 +1956,7 @@ export function AgentEditorPage() {
         kanban: kanbanJson,
         toolGuidance: toolGuidanceJson,
         whazingPix: whazingPix ?? null,
+        whazingIntake: whazingIntakeJson,
       }));
       markSynced(String(agentRes.data.agent.updatedAt));
       bumpSync("tools", "knowledge");
@@ -2513,6 +2557,8 @@ export function AgentEditorPage() {
                 setKanbanWhazingBoard={setKanbanWhazingBoard}
                 whazingPix={whazingPix}
                 setWhazingPix={setWhazingPix}
+                whazingIntake={whazingIntake}
+                setWhazingIntake={setWhazingIntake}
                 customAttributeInstructions={customAttributeInstructions}
                 setCustomAttributeInstructions={setCustomAttributeInstructions}
                 labelInstructions={labelInstructions}

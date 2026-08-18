@@ -19,6 +19,8 @@ import type { WhazingTicketStatus } from "./types";
 //                                  "number" is the contact's phone (not a ticket id/number) —
 //                                  {ticketId: ...} 500s. Returns the contact's latest ticket,
 //                                  which may be a newer ticket than the one you have in hand.
+//   POST {base}/showallticket    — every ticket ever opened for a contact (by phone) — the history
+//                                  check for intake routing.
 //   POST {base}/updatecontact    — update contact fields
 //   GET  {base}/kanbanpro/boards               — list boards
 //   GET  {base}/kanbanpro/boards/:id/columns   — list columns of a board
@@ -132,6 +134,17 @@ export class WhazingClient implements InboxReplyClient {
     });
   }
 
+  // Send text to a raw phone number, no existing ticket required (Whazing opens/reuses one).
+  // Used for internal notifications (e.g. a campaign-lead alert to an ops number) — there is no
+  // ticket to address in that case, only a destination phone.
+  sendMessageToNumber(phone: string, text: string): Promise<unknown> {
+    return this.request("POST", "", {
+      body: text,
+      number: phone,
+      externalKey: randomUUID(),
+    });
+  }
+
   // Whazing has no native private-note concept. Previously this fell back to sendMessage,
   // which leaked LLM-internal summaries (sometimes including patient health details) straight
   // to the customer's WhatsApp thread. Until Whazing ships a real internal-note endpoint, the
@@ -190,6 +203,33 @@ export class WhazingClient implements InboxReplyClient {
       return res;
     } catch (e) {
       if (e instanceof WhazingApiError && e.status === 404) return null;
+      throw e;
+    }
+  }
+
+  // Every ticket ever opened for a contact (by phone), via /showallticket — unlike /showticket
+  // (current ticket only), this is the history check for intake routing (does this contact have a
+  // prior attendance?). TENTATIVE: confirmed from Whazing's own Postman collection (body shape
+  // {number}), but no live response was captured to confirm the array shape — verify against a live
+  // instance before relying on `answered` beyond a truthy/falsy read.
+  async listTicketsByPhone(
+    phone: string,
+  ): Promise<
+    Array<{ id: number; status: WhazingTicketStatus; answered: boolean }>
+  > {
+    try {
+      const res = await this.request("POST", "/showallticket", {
+        number: phone,
+      });
+      return Array.isArray(res)
+        ? (res as Array<{
+            id: number;
+            status: WhazingTicketStatus;
+            answered: boolean;
+          }>)
+        : [];
+    } catch (e) {
+      if (e instanceof WhazingApiError && e.status === 404) return [];
       throw e;
     }
   }

@@ -3,7 +3,8 @@ import logger from "@/api/lib/logger";
 import basePrisma from "@/api/lib/prisma";
 import { AppError, UnauthorizedError } from "@/lib/errors";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
-import { resolveInstanceByRouteToken } from "./instance";
+import { loadWhazingClient, resolveInstanceByRouteToken } from "./instance";
+import { resolveEscalateQueueId, runWhazingIntake } from "./intake";
 import {
   isManualHumanReply,
   isNewIncomingMessage,
@@ -159,12 +160,26 @@ export async function processWhazingDelivery(
     // A human agent typing directly in Whazing. Record it and stop — this message itself is not
     // for the bot to act on, but every customer message that follows must see the takeover.
     if (isManualHumanReply(normalized) && normalized.ticketId != null) {
-      await recordHumanTakeover(
-        base,
-        tenantId,
-        instanceId,
-        normalized.ticketId,
-      );
+      const ticketId = normalized.ticketId;
+      await recordHumanTakeover(base, tenantId, instanceId, ticketId);
+      // Best-effort: also move the ticket in Whazing itself, not just our own gate. A configured
+      // escalate queue is optional (humanTakeoverAt alone already stops the bot without it).
+      try {
+        const escalateQueueId = await resolveEscalateQueueId(
+          base,
+          tenantId,
+          instanceId,
+        );
+        if (escalateQueueId != null) {
+          const client = await loadWhazingClient(tenantId, instanceId, base);
+          await client.assignTicketToQueue(ticketId, escalateQueueId);
+        }
+      } catch (e) {
+        logger.warn(
+          { ticketId, error: e },
+          "whazing: queue move on human takeover failed (non-fatal)",
+        );
+      }
       await markProcessed(base, tenantId, deliveryRowId);
       return;
     }
@@ -187,6 +202,17 @@ export async function processWhazingDelivery(
     ) {
       await markProcessed(base, tenantId, deliveryRowId);
       return;
+    }
+
+    // Intake routing + campaign tagging run once, on the first message we ever see for a ticket
+    // (no WhazingConversation row yet) — every message after that is either already on the right
+    // queue or already covered by the takeover check above.
+    if (
+      normalized.status === "pending" &&
+      normalized.ticketId != null &&
+      !(await isKnownTicket(base, tenantId, instanceId, normalized.ticketId))
+    ) {
+      await runWhazingIntake({ tenantId, instanceId, event: normalized, base });
     }
 
     const outcome = await runWhazingAgentTurn({
@@ -213,6 +239,25 @@ export async function processWhazingDelivery(
     );
     // Leave in PROCESSING — reaper will reset to PENDING for retry.
   }
+}
+
+// Whether we already have a WhazingConversation row for this ticket — the intake-routing gate: a
+// ticket only gets routed once, on its first message (see processWhazingDelivery).
+async function isKnownTicket(
+  base: PrismaClient,
+  tenantId: bigint,
+  instanceId: bigint,
+  ticketId: number,
+): Promise<boolean> {
+  const row = await runScopedOn(base, sysCtx(tenantId), (db) =>
+    db.whazingConversation.findUnique({
+      where: {
+        tenantId_instanceId_ticketId: { tenantId, instanceId, ticketId },
+      },
+      select: { id: true },
+    }),
+  );
+  return row != null;
 }
 
 // A human just typed directly in Whazing. Whazing's own queue move away from the bot's queue is

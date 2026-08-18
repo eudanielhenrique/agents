@@ -416,3 +416,102 @@ describe("isManualHumanReply", () => {
     expect(isManualHumanReply(ev)).toBe(false);
   });
 });
+
+// ── campaignSignal (dataJson contextInfo extraction) ──────────────────────────
+//
+// Real production payload shapes (captured from a live n8n execution against this same webhook
+// stream). The click_to_chat_link case is a real capture; the ctwa_ad case is synthesized from the
+// same contract (n8n's "Analisar Sinal de Campanha" node) — no live ctwa_ad execution was available
+// to capture at write time.
+
+describe("normalizeWhazingEvent campaignSignal", () => {
+  test("returns null for a click_to_chat_link entry (not a campaign)", () => {
+    const ev = normalizeWhazingEvent({
+      messageId: "m1",
+      messageBody: "Olá! Gostaria de mais informações",
+      fromMe: false,
+      ticket: { id: 1, status: "pending" },
+      dataJson: JSON.stringify({
+        message: {
+          content: {
+            text: "Olá! Gostaria de mais informações",
+            contextInfo: {
+              entryPointConversionSource: "click_to_chat_link",
+              entryPointConversionDelaySeconds: 4,
+            },
+          },
+        },
+      }),
+    });
+    expect(ev?.campaignSignal).toBeNull();
+  });
+
+  test("returns null when dataJson is absent", () => {
+    const ev = normalizeWhazingEvent({
+      messageId: "m2",
+      messageBody: "oi",
+      fromMe: false,
+      ticket: { id: 1, status: "pending" },
+    });
+    expect(ev?.campaignSignal).toBeNull();
+  });
+
+  test("returns null when dataJson is malformed JSON", () => {
+    const ev = normalizeWhazingEvent({
+      messageId: "m3",
+      messageBody: "oi",
+      fromMe: false,
+      ticket: { id: 1, status: "pending" },
+      dataJson: "{not valid json",
+    });
+    expect(ev?.campaignSignal).toBeNull();
+  });
+
+  test("extracts ctwaClid + source from a ctwa_ad entry (content variant)", () => {
+    const ev = normalizeWhazingEvent({
+      messageId: "m4",
+      messageBody: "Vi o anúncio de vocês",
+      fromMe: false,
+      ticket: { id: 1, status: "pending" },
+      dataJson: JSON.stringify({
+        message: {
+          content: {
+            text: "Vi o anúncio de vocês",
+            contextInfo: {
+              entryPointConversionSource: "ctwa_ad",
+              externalAdReply: {
+                ctwaClid: "AbCd1234",
+                sourceId: "120210000000000",
+                sourceApp: "AN",
+              },
+            },
+          },
+        },
+      }),
+    });
+    expect(ev?.campaignSignal).toEqual({
+      ctwaClid: "AbCd1234",
+      sourceId: "120210000000000",
+      sourceApp: "AN",
+    });
+  });
+
+  test("finds contextInfo under extendedTextMessage (another message-type variant)", () => {
+    const ev = normalizeWhazingEvent({
+      messageId: "m5",
+      messageBody: "oi",
+      fromMe: false,
+      ticket: { id: 1, status: "pending" },
+      dataJson: JSON.stringify({
+        message: {
+          extendedTextMessage: {
+            contextInfo: {
+              externalAdReply: { ctwaClid: "XyZ789" },
+            },
+          },
+        },
+      }),
+    });
+    expect(ev?.campaignSignal?.ctwaClid).toBe("XyZ789");
+  });
+});
