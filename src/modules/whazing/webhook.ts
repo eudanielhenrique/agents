@@ -3,6 +3,7 @@ import logger from "@/api/lib/logger";
 import basePrisma from "@/api/lib/prisma";
 import { AppError, UnauthorizedError } from "@/lib/errors";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
+import { wasRecentlyBotSent } from "./bot-send-tracker";
 import { loadWhazingClient, resolveInstanceByRouteToken } from "./instance";
 import { resolveEscalateQueueId, runWhazingIntake } from "./intake";
 import {
@@ -159,7 +160,16 @@ export async function processWhazingDelivery(
   try {
     // A human agent typing directly in Whazing. Record it and stop — this message itself is not
     // for the bot to act on, but every customer message that follows must see the takeover.
-    if (isManualHumanReply(normalized) && normalized.ticketId != null) {
+    // wasRecentlyBotSent guards this: sendType ("bot"/"smartreception") turned out to be an
+    // unreliable signal in practice — Whazing doesn't always stamp it on the echo of our own
+    // sends, which was self-silencing the bot right after its own first reply (see bug fix
+    // 2026-08-18, ticket 11372: humanTakeoverAt got set ~14s after Lia's own message, no human
+    // involved at all). A message we ourselves sent seconds ago is never a takeover.
+    if (
+      isManualHumanReply(normalized) &&
+      normalized.ticketId != null &&
+      !wasRecentlyBotSent(instanceId, normalized.ticketId)
+    ) {
       const ticketId = normalized.ticketId;
       await recordHumanTakeover(base, tenantId, instanceId, ticketId);
       // Best-effort: also move the ticket in Whazing itself, not just our own gate. A configured

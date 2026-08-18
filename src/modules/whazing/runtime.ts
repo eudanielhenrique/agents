@@ -22,6 +22,7 @@ import { runScopedOn, type TenantContext } from "@/lib/tenancy";
 import type { ChatwootClient } from "@/modules/chatwoot/client";
 import { emitFlowEvent, type FlowContext } from "@/modules/flowlog/service";
 import { deliverReply } from "@/modules/split/service";
+import { markBotSent } from "@/modules/whazing/bot-send-tracker";
 import { looksLikePersonName } from "@/modules/whazing/contact-name";
 import { loadWhazingClient } from "./instance";
 import { resolveWhazingSttConfig, transcribeWhazingAudio } from "./media";
@@ -288,6 +289,7 @@ export async function runWhazingAgentTurn(
     buildWhazingNativeTools(
       {
         client,
+        instanceId,
         ticketId,
         contactId: event.contact?.id ?? undefined,
         timezone: loaded.timezone,
@@ -359,6 +361,7 @@ export async function runWhazingAgentTurn(
       undefined,
       flow,
     );
+    markBotSent(instanceId, ticketId);
     logger.info(
       "whazing agent replied: ticket=%s thread=%s len=%d",
       String(ticketId),
