@@ -29,6 +29,11 @@ export interface WhazingToolCtx {
   // Operator-configured PIX key for send_pix_button / request_payment. null ⇒ those tools decline
   // (they never accept a model-supplied key — see payments.ts).
   pixConfig?: WhazingPixConfig | null;
+  // Operator-configured escalation queue (agent.settings.handoff.whazingQueueId), used as the
+  // fallback when the model calls handoff_to_human without a queueId — the tool description only
+  // mentions the number as advisory text, so relying on the model to always echo it back is not
+  // reliable (confirmed in production: an omitted queueId leaves the ticket in no queue at all).
+  handoffQueueId?: number | null;
 }
 
 function handoffToHumanTool(ctx: WhazingToolCtx) {
@@ -65,15 +70,16 @@ function handoffToHumanTool(ctx: WhazingToolCtx) {
           );
         }
       }
-      if (queueId != null) {
+      const targetQueueId = queueId ?? ctx.handoffQueueId ?? undefined;
+      if (targetQueueId != null) {
         try {
-          await ctx.client.assignTicketToQueue(ctx.ticketId, queueId);
-          return `Handed off to a human (assigned to queue ${queueId}). The bot will stay silent now.`;
+          await ctx.client.assignTicketToQueue(ctx.ticketId, targetQueueId);
+          return `Handed off to a human (assigned to queue ${targetQueueId}). The bot will stay silent now.`;
         } catch (e) {
           logger.warn(
             "whazing handoff queue assignment failed (ticket=%s queue=%s): %s",
             String(ctx.ticketId),
-            String(queueId),
+            String(targetQueueId),
             e instanceof Error ? e.message : String(e),
           );
           return "Handed off to a human. Queue assignment failed — the ticket stays in default routing. The bot will stay silent now.";

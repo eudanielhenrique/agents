@@ -72,7 +72,9 @@ export type RunAgentTurnOutcome =
   | "empty"
   | "taken-over"
   | "superseded"
-  | "blocked";
+  | "blocked"
+  // Buffered into a debounce coalescing window — not answered by this call (Whazing only so far).
+  | "queued";
 
 export interface RuntimeDeps {
   makeModel?: (cfg: ResolvedModelConfig) => BaseChatModel;

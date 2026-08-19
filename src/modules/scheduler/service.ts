@@ -179,17 +179,29 @@ export function claimDueJobs(
   now: Date = new Date(),
   tenantId?: bigint,
 ): Promise<ClaimedJob[]> {
-  return claimWhere(limit, base, now, Prisma.sql`kind <> 'DEBOUNCE'`, tenantId);
+  return claimWhere(
+    limit,
+    base,
+    now,
+    Prisma.sql`kind NOT IN ('DEBOUNCE', 'WHAZING_DEBOUNCE')`,
+    tenantId,
+  );
 }
 
-// The fast debounce tick claims ONLY debounce jobs.
+// The fast debounce tick claims debounce jobs of either transport.
 export function claimDueDebounceJobs(
   limit: number,
   base: PrismaClient = basePrisma,
   now: Date = new Date(),
   tenantId?: bigint,
 ): Promise<ClaimedJob[]> {
-  return claimWhere(limit, base, now, Prisma.sql`kind = 'DEBOUNCE'`, tenantId);
+  return claimWhere(
+    limit,
+    base,
+    now,
+    Prisma.sql`kind IN ('DEBOUNCE', 'WHAZING_DEBOUNCE')`,
+    tenantId,
+  );
 }
 
 // Terminal success.

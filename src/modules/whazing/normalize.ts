@@ -272,3 +272,15 @@ export function isManualHumanReply(event: NormalizedWhazingEvent): boolean {
     return false;
   return true;
 }
+
+export type WhazingControlCommand = "teste" | "reset";
+
+// Mirrors chatwoot/normalize.ts's controlCommand — pure text match, no Chatwoot type involved.
+export function whazingControlCommand(
+  body: string | null | undefined,
+): WhazingControlCommand | null {
+  const lc = (body ?? "").trim().toLowerCase();
+  if (lc === "/teste") return "teste";
+  if (lc === "/reset") return "reset";
+  return null;
+}

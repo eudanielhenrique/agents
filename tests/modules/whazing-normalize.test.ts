@@ -5,12 +5,32 @@ import {
   isNewIncomingMessage,
   normalizeWhazingEvent,
   shouldWhazingBotHandle,
+  whazingControlCommand,
   whazingDeliveryId,
 } from "@/modules/whazing/normalize";
 import {
   WHAZING_WEBHOOK_MOUNT,
   whazingWebhookUrl,
 } from "@/modules/whazing/webhook-mount";
+
+// ── control command parser (test-mode gate) ──────────────────────────────────
+
+describe("whazingControlCommand", () => {
+  test("recognizes /teste and /reset, case/whitespace insensitive", () => {
+    expect(whazingControlCommand("/teste")).toBe("teste");
+    expect(whazingControlCommand("/RESET")).toBe("reset");
+    expect(whazingControlCommand("  /teste  ")).toBe("teste");
+    expect(whazingControlCommand("/Teste")).toBe("teste");
+  });
+
+  test("anything else, including near-misses, is not a command", () => {
+    expect(whazingControlCommand("teste")).toBeNull();
+    expect(whazingControlCommand("/teste por favor")).toBeNull();
+    expect(whazingControlCommand("")).toBeNull();
+    expect(whazingControlCommand(null)).toBeNull();
+    expect(whazingControlCommand(undefined)).toBeNull();
+  });
+});
 
 // ── webhook mount constant + URL derivation (unit) ───────────────────────────
 

@@ -1,9 +1,11 @@
 import { Prisma, type PrismaClient } from "@/../generated/prisma/client";
 import logger from "@/api/lib/logger";
 import basePrisma from "@/api/lib/prisma";
+import { getCheckpointer } from "@/graph/checkpointer";
 import { AppError, UnauthorizedError } from "@/lib/errors";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
 import { wasRecentlyBotSent } from "./bot-send-tracker";
+import { resolveWhazingInboxAndAgent } from "./inbox-resolve";
 import { loadWhazingClient, resolveInstanceByRouteToken } from "./instance";
 import { resolveEscalateQueueId, runWhazingIntake } from "./intake";
 import {
@@ -11,9 +13,11 @@ import {
   isNewIncomingMessage,
   normalizeWhazingEvent,
   shouldWhazingBotHandle,
+  whazingControlCommand,
   whazingDeliveryId,
 } from "./normalize";
-import { runWhazingAgentTurn } from "./runtime";
+import { runWhazingAgentTurn, upsertWhazingConversation } from "./runtime";
+import { resolveWhazingGraphThreadId } from "./thread-keys";
 import type { NormalizedWhazingEvent } from "./types";
 
 // Whazing channel webhook receiver.
@@ -214,6 +218,21 @@ export async function processWhazingDelivery(
       return;
     }
 
+    // Test-mode command/gate — a "test" agent stays silent on this ticket until /teste, mirroring
+    // Chatwoot's maybeConsumeCommandOrGate. Runs BEFORE intake on purpose: a not-yet-activated test
+    // agent must not tag campaign leads or route production traffic while still silenced.
+    if (
+      await maybeConsumeWhazingCommandOrGate({
+        tenantId,
+        instanceId,
+        normalized,
+        base,
+      })
+    ) {
+      await markProcessed(base, tenantId, deliveryRowId);
+      return;
+    }
+
     // Intake routing + campaign tagging run once, on the first message we ever see for a ticket
     // (no WhazingConversation row yet) — every message after that is either already on the right
     // queue or already covered by the takeover check above. The queue move this makes only takes
@@ -266,6 +285,146 @@ export async function processWhazingDelivery(
     );
     // Leave in PROCESSING — reaper will reset to PENDING for retry.
   }
+}
+
+// Test-mode command/gate — the Whazing counterpart of chatwoot/webhook.ts's
+// maybeConsumeCommandOrGate, scoped to the safety-critical part only: /teste activates the
+// conversation, /reset (once activated) clears the graph memory, and a "test" mode agent stays
+// silent (one-shot private note) until activated. Returns true when the delivery was fully handled
+// here (the caller must not run the normal turn).
+async function maybeConsumeWhazingCommandOrGate(params: {
+  tenantId: bigint;
+  instanceId: bigint;
+  normalized: NormalizedWhazingEvent;
+  base: PrismaClient;
+}): Promise<boolean> {
+  const { tenantId, instanceId, normalized, base } = params;
+  const ticketId = normalized.ticketId;
+  if (ticketId == null) return false;
+
+  const command = whazingControlCommand(normalized.message?.body);
+
+  const inbox = await resolveWhazingInboxAndAgent(
+    base,
+    tenantId,
+    instanceId,
+    normalized.queueId,
+  );
+  if (!inbox) return false;
+  const agentId = inbox.agentId;
+
+  const agent = await runScopedOn(base, sysCtx(tenantId), (db) =>
+    db.agent.findUnique({ where: { id: agentId }, select: { mode: true } }),
+  );
+  if (!agent) return false;
+  // Hot-path skip: the overwhelming majority of traffic is a production-mode agent with no control
+  // command — nothing below applies, so avoid the extra mirror upsert + read on every message. A
+  // production agent that later gets switched to "test" starts silenced from its next message on
+  // (no row means "not activated"), which is the safe direction to be wrong in.
+  if (agent.mode !== "test" && command === null) return false;
+  // Control commands only apply to a test-mode agent (mirrors Chatwoot's commandActive) — on a
+  // production agent, "/teste"/"/reset" are just ordinary text, answered normally.
+  const commandActive = command !== null && agent.mode === "test";
+
+  const client = await loadWhazingClient(tenantId, instanceId, base);
+  const threadId = resolveWhazingGraphThreadId(tenantId, instanceId, {
+    whatsappId: normalized.contact?.whatsappId ?? undefined,
+    contactId: normalized.contact?.id ?? undefined,
+    ticketId,
+  });
+
+  // Mirror the ticket unconditionally BEFORE reading test-mode state (same reasoning as Chatwoot's
+  // mirrorChatwootEvent running before its gate) — guarantees a row exists so the notice/activation
+  // watermarks below always persist, even on a brand-new ticket's very first message. Never touches
+  // testActivatedAt/testNoticeSentAt itself, so it cannot clobber existing test-mode state.
+  await upsertWhazingConversation(base, sysCtx(tenantId), {
+    instanceId,
+    inboxId: inbox.inboxId,
+    ticketId,
+    threadId,
+    agentId,
+    status: normalized.status,
+    assignedUserId: normalized.assignedUserId,
+    contactId: normalized.contact?.id ?? null,
+    contactName: normalized.contact?.name ?? null,
+    contactPhone: normalized.contact?.phone ?? null,
+  });
+
+  const existing = await runScopedOn(base, sysCtx(tenantId), (db) =>
+    db.whazingConversation.findUnique({
+      where: {
+        tenantId_instanceId_ticketId: { tenantId, instanceId, ticketId },
+      },
+      select: { testActivatedAt: true, testNoticeSentAt: true },
+    }),
+  );
+  const testActivatedAt = existing?.testActivatedAt ?? null;
+  const testNoticeSentAt = existing?.testNoticeSentAt ?? null;
+
+  const ack = async (text: string): Promise<void> => {
+    try {
+      await client.sendMessage(ticketId, text);
+    } catch (e) {
+      logger.warn(
+        { ticketId, error: e },
+        "whazing: command ack failed (non-fatal)",
+      );
+    }
+  };
+
+  if (commandActive && command === "teste") {
+    await runScopedOn(base, sysCtx(tenantId), (db) =>
+      db.whazingConversation.updateMany({
+        where: { tenantId, instanceId, ticketId },
+        data: { testActivatedAt: new Date(), lastInboundAt: null },
+      }),
+    );
+    await ack("🧪 Modo teste ativado para esta conversa.");
+    logger.info("whazing: /teste activated (ticket=%s)", String(ticketId));
+    return true;
+  }
+
+  if (commandActive && command === "reset" && testActivatedAt != null) {
+    try {
+      const cp = await getCheckpointer();
+      await cp.deleteThread(threadId);
+    } catch (e) {
+      logger.warn(
+        { ticketId, error: e },
+        "whazing: /reset memory clear failed (non-fatal)",
+      );
+    }
+    await ack("🔄 Memória desta conversa foi limpa.");
+    logger.info("whazing: /reset (ticket=%s)", String(ticketId));
+    return true;
+  }
+  // /reset before activation: fall through to the gate below — must NOT answer pre-activation
+  // (mirrors the Chatwoot bug fix documented in chatwoot/webhook.ts around isReset).
+
+  if (agent.mode === "test" && testActivatedAt === null) {
+    if (testNoticeSentAt === null) {
+      try {
+        await client.sendPrivateNote(
+          ticketId,
+          "🧪 Este agente está em modo teste. Ele não responde automaticamente nesta conversa. Envie /teste para ativar as respostas aqui.",
+        );
+      } catch (e) {
+        logger.warn(
+          { ticketId, error: e },
+          "whazing: test-mode notice failed (non-fatal)",
+        );
+      }
+      await runScopedOn(base, sysCtx(tenantId), (db) =>
+        db.whazingConversation.updateMany({
+          where: { tenantId, instanceId, ticketId },
+          data: { testNoticeSentAt: new Date() },
+        }),
+      );
+    }
+    return true;
+  }
+
+  return false;
 }
 
 // Whether we already have a WhazingConversation row for this ticket — the intake-routing gate: a

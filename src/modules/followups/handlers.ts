@@ -16,6 +16,10 @@ import { isFollowUpLive } from "@/modules/followups/eligibility";
 import { type ClaimedJob, enqueueJob } from "@/modules/scheduler/service";
 import { type JobResult, registerJobHandler } from "@/modules/scheduler/worker";
 import {
+  handleWhazingFollowUp,
+  sweepWhazingFollowUps,
+} from "@/modules/whazing/followups";
+import {
   type FollowUpStep,
   isNewFollowUpEpisode,
   readFollowUpConfig,
@@ -198,6 +202,7 @@ async function sweepHandler(
       base,
     });
   }
+  await sweepWhazingFollowUps(tenantId, cutoffMin, base);
   return {
     outcome: "reschedule",
     runAt: new Date(Date.now() + SWEEP_INTERVAL_MS),
@@ -212,6 +217,12 @@ export async function followUpHandler(
   const threadId =
     typeof job.payload.threadId === "string" ? job.payload.threadId : null;
   if (!threadId) return { outcome: "done" };
+  // Whazing threadIds have no single decodable shape (see whazing/thread-keys.ts) but all share the
+  // "tenant:{tenantId}:whazing:{instanceId}:..." prefix — same dispatch trick as
+  // appointments/reminders.ts's Whazing branch.
+  if (threadId.includes(":whazing:")) {
+    return handleWhazingFollowUp(job, base, deps);
+  }
   const parsed = parseThreadId(threadId);
   if (!parsed || parsed.tenantId !== job.tenantId) return { outcome: "done" };
   const { instanceId, conversationId } = parsed;

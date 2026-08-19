@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "SchedulerJobKind" ADD VALUE 'WHAZING_DEBOUNCE';

@@ -33,6 +33,7 @@ import {
   startOutboundWorker,
   stopOutboundWorker,
 } from "@/modules/webhooks/outbound/worker";
+import { registerWhazingDebounceHandler } from "@/modules/whazing/debounce";
 import {
   ensureAllWhazingReconciles,
   registerWhazingReconcileHandler,
@@ -193,6 +194,7 @@ if (config.alertWorker.enabled) {
 // so a claimed debounce job always has a handler.
 if (config.debounceWorker.enabled) {
   registerDebounceHandler();
+  registerWhazingDebounceHandler();
   startDebounceWorker();
 }
 

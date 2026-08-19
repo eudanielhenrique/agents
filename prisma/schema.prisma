@@ -65,6 +65,7 @@ enum SchedulerJobKind {
   APPOINTMENT_REMINDER
   REDIRECT_FOLLOWUP
   WHAZING_RECONCILE
+  WHAZING_DEBOUNCE
 }
 
 enum SchedulerJobStatus {
@@ -452,6 +453,13 @@ model WhazingConversation {
   lastInboundAt  DateTime? @map("last_inbound_at")
   lastError      String?   @map("last_error")
   lastErrorAt    DateTime? @map("last_error_at")
+  // Mirrors Conversation.testActivatedAt/testNoticeSentAt (Chatwoot) — a "test" mode agent stays
+  // silent on this ticket until the contact sends /teste; the notice watermark is anti-spam for the
+  // one-shot "this agent is in test mode" note.
+  testActivatedAt  DateTime? @map("test_activated_at")
+  testNoticeSentAt DateTime? @map("test_notice_sent_at")
+  // Watermark for the follow-up (reengagement) sequence — mirrors Conversation.lastFollowUpAt.
+  lastFollowUpAt DateTime? @map("last_follow_up_at")
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 

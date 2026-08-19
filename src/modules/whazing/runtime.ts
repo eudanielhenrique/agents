@@ -10,6 +10,7 @@ import {
   markTurnInFlight,
 } from "@/graph/inflight";
 import {
+  type AgentConfig,
   buildCallbacks,
   buildModelAndGraph,
   buildToolset,
@@ -24,6 +25,9 @@ import { emitFlowEvent, type FlowContext } from "@/modules/flowlog/service";
 import { deliverReply } from "@/modules/split/service";
 import { markBotSent } from "@/modules/whazing/bot-send-tracker";
 import { looksLikePersonName } from "@/modules/whazing/contact-name";
+import type { WhazingClient } from "./client";
+import { armWhazingDebounce, resolveWhazingDebounceConfig } from "./debounce";
+import { resolveWhazingInboxAndAgent } from "./inbox-resolve";
 import { loadWhazingClient } from "./instance";
 import { resolveWhazingSttConfig, transcribeWhazingAudio } from "./media";
 import { renderWhazingMessage } from "./render";
@@ -32,8 +36,10 @@ import { buildWhazingNativeTools } from "./tools";
 import type { NormalizedWhazingEvent } from "./types";
 
 // Upsert the WhazingConversation mirror row so the Conversations page can show Whazing tickets.
-// Returns the row id (used as conversationId in ExecutionLog for trail markers).
-async function upsertWhazingConversation(
+// Returns the row id (used as conversationId in ExecutionLog for trail markers). Exported: the
+// test-mode command/gate (webhook.ts) also needs to upsert a row when /teste arrives on a
+// not-yet-mirrored ticket.
+export async function upsertWhazingConversation(
   base: PrismaClient,
   ctx: TenantContext,
   params: {
@@ -125,23 +131,13 @@ export async function runWhazingAgentTurn(
   const ticketId = event.ticketId;
   if (ticketId == null) return "skipped";
 
-  // Resolve the WhazingInbox that handles this ticket's queue.
-  // Priority: matching queueId → catch-all (null queueId).
-  const inbox = await runScopedOn(base, sysCtx(tenantId), async (db) => {
-    if (event.queueId != null) {
-      const specific = await db.whazingInbox.findFirst({
-        where: { tenantId, instanceId, whazingQueueId: String(event.queueId) },
-        select: { id: true, agentId: true },
-      });
-      if (specific) return specific;
-    }
-    return db.whazingInbox.findFirst({
-      where: { tenantId, instanceId, whazingQueueId: null },
-      select: { id: true, agentId: true },
-    });
-  });
-
-  if (!inbox?.agentId) return "no-agent";
+  const inbox = await resolveWhazingInboxAndAgent(
+    base,
+    tenantId,
+    instanceId,
+    event.queueId ?? null,
+  );
+  if (!inbox) return "no-agent";
   const agentId = inbox.agentId;
 
   const threadId = resolveWhazingGraphThreadId(tenantId, instanceId, {
@@ -150,13 +146,13 @@ export async function runWhazingAgentTurn(
     ticketId,
   });
 
-  // Whazing has no debounce/coalescing wiring yet (unlike Chatwoot) — two WhatsApp messages sent
-  // moments apart (e.g. an image + its caption as separate webhook events) each spawn their own
-  // independent turn. Racing them produces two near-simultaneous LLM calls unaware of each other,
-  // which can generate near-identical or duplicate replies. Wait for the in-flight turn on this
-  // thread to clear so the second turn's history already includes the first turn's reply — the
-  // model then naturally avoids repeating itself. Capped so a stuck/crashed turn never strands a
-  // customer's message forever.
+  // Two WhatsApp messages sent moments apart that both skip the debounce arm (e.g. debounce
+  // disabled, or an image + its caption as separate webhook events before either renders text) each
+  // spawn their own independent turn. Racing them produces two near-simultaneous LLM calls unaware
+  // of each other, which can generate near-identical or duplicate replies. Wait for the in-flight
+  // turn on this thread to clear so the second turn's history already includes the first turn's
+  // reply — the model then naturally avoids repeating itself. Capped so a stuck/crashed turn never
+  // strands a customer's message forever.
   const inFlightWaitStartedAt = Date.now();
   while (
     isTurnInFlight(threadId) &&
@@ -207,7 +203,7 @@ export async function runWhazingAgentTurn(
     sysCtx(tenantId),
     {
       instanceId,
-      inboxId: inbox.id ?? null,
+      inboxId: inbox.inboxId,
       ticketId,
       threadId,
       agentId,
@@ -292,6 +288,90 @@ export async function runWhazingAgentTurn(
     }
   }
 
+  // Debounce path: an incoming message on a debounce-enabled agent buffers its rendered text into
+  // the durable WHAZING_DEBOUNCE job instead of answering right away — the fast worker flushes it
+  // (coalesce + one reply). Arming is best-effort: any failure falls back to the direct turn below
+  // so the customer is never left unanswered (same principle as the Chatwoot arm in webhook.ts).
+  try {
+    const cfg = await resolveWhazingDebounceConfig(tenantId, agentId, base);
+    if (cfg) {
+      await armWhazingDebounce({
+        tenantId,
+        threadId,
+        ticketId,
+        instanceId,
+        queueId: event.queueId ?? null,
+        text,
+        contactId: event.contact?.id ?? null,
+        rawContactName,
+        cfg,
+        base,
+      });
+      logger.info(
+        "whazing: debounced (ticket=%s window=%ds)",
+        String(ticketId),
+        cfg.windowSeconds,
+      );
+      clearTurnInFlight(threadId);
+      return "queued";
+    }
+  } catch (e) {
+    logger.warn(
+      "whazing debounce arm failed (ticket=%s), falling back to direct turn: %s",
+      String(ticketId),
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+
+  return runWhazingTurnTail({
+    tenantId,
+    instanceId,
+    ticketId,
+    threadId,
+    loaded,
+    text,
+    client,
+    contactId: event.contact?.id ?? undefined,
+    whazingConvId,
+    flow,
+    base,
+  });
+}
+
+export interface RunWhazingTurnTailParams {
+  tenantId: bigint;
+  instanceId: bigint;
+  ticketId: number;
+  threadId: string;
+  loaded: AgentConfig;
+  text: string;
+  client: WhazingClient;
+  contactId?: number;
+  whazingConvId: bigint | null;
+  flow: FlowContext;
+  base: PrismaClient;
+}
+
+// The shared "tools ready → invoke → recheck takeover → deliver → mark sent" tail, reused by the
+// direct path above AND the debounce flush (debounce.ts). Caller must call markTurnInFlight(threadId)
+// before invoking this — the finally below is the single place that clears it.
+export async function runWhazingTurnTail(
+  params: RunWhazingTurnTailParams,
+): Promise<RunAgentTurnOutcome> {
+  const {
+    tenantId,
+    instanceId,
+    ticketId,
+    threadId,
+    loaded,
+    text,
+    client,
+    contactId,
+    whazingConvId,
+    flow,
+    base,
+  } = params;
+
   // buildToolset with Whazing-native tools. The ctx.client cast is safe: buildToolset
   // uses it only for slow-tool acks (sendMessage + toggleTyping — both in InboxReplyClient).
   // buildNativeTools ignores ctx.client entirely; instead, it closes over the actual
@@ -305,10 +385,11 @@ export async function runWhazingAgentTurn(
         client,
         instanceId,
         ticketId,
-        contactId: event.contact?.id ?? undefined,
+        contactId,
         timezone: loaded.timezone,
         toolInstructions: nativeCtx.toolInstructions,
         pixConfig: loaded.pixConfig,
+        handoffQueueId: loaded.handoffConfig.whazingQueueId,
       },
       allowed,
     );
