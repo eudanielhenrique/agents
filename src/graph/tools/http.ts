@@ -502,7 +502,16 @@ export function buildHttpTool(
       }
 
       let body: string | undefined;
-      if (isBodyMethod) {
+      // Legacy "fields" body only applies when there's no explicit query (mirrors the non-body-method
+      // branch below) — a "new tool" with explicit query params fully describing the request must never
+      // ALSO get a silently-assembled JSON body: a fixed-only query param (e.g. a hardcoded idUnidade
+      // that never appears in the AI-facing inputSchema) would be invisible to that body, and a target
+      // API that reads the JSON body over the query string on Content-Type: application/json would then
+      // see that param as simply missing — a real prod incident (Datasigh's POST /agendamento silently
+      // losing idUnidade/celularSiglaPaisPaciente this way, confirmed via curl-equivalent repro).
+      const skipLegacyBody =
+        bodyCfg.mode === "fields" ? hasExplicitQuery : false;
+      if (isBodyMethod && !skipLegacyBody) {
         const hasContentType = Object.keys(headers).some(
           (h) => h.toLowerCase() === "content-type",
         );
