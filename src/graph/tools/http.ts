@@ -293,7 +293,7 @@ export function buildHttpTool(
     method === "POST" || method === "PUT" || method === "PATCH";
   const doFetch = deps.fetchImpl ?? fetch;
   const timeoutMs = deps.timeoutMs ?? 10_000;
-  const maxChars = deps.maxResponseChars ?? 4000;
+  const maxChars = deps.maxResponseChars ?? 20000;
   const expectedStatuses = normalizeExpectedStatuses(def.expectedStatuses);
 
   // Schema = the AI-filled fields. When an ack is configured, the model MUST write the holding message
