@@ -34,6 +34,11 @@ export interface WhazingToolCtx {
   // mentions the number as advisory text, so relying on the model to always echo it back is not
   // reliable (confirmed in production: an omitted queueId leaves the ticket in no queue at all).
   handoffQueueId?: number | null;
+  // Called when handoff_to_human successfully sends `customerMessage` directly to the ticket, so
+  // the turn tail (runWhazingTurnTail) can skip re-sending the model's own final reply text —
+  // otherwise the customer gets that same "a human will take over" message twice: once here, once
+  // via the normal deliverReply at the end of the turn.
+  onCustomerMessageSent?: () => void;
 }
 
 function handoffToHumanTool(ctx: WhazingToolCtx) {
@@ -51,6 +56,7 @@ function handoffToHumanTool(ctx: WhazingToolCtx) {
         try {
           await ctx.client.sendMessage(ctx.ticketId, customerMessage.trim());
           markBotSent(ctx.instanceId, ctx.ticketId);
+          ctx.onCustomerMessageSent?.();
         } catch (e) {
           logger.warn(
             "whazing handoff customer message failed (ticket=%s): %s",

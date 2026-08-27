@@ -143,6 +143,7 @@ export async function runWhazingAgentTurn(
   const threadId = resolveWhazingGraphThreadId(tenantId, instanceId, {
     whatsappId: event.contact?.whatsappId ?? undefined,
     contactId: event.contact?.id ?? undefined,
+    normalizedPhone: event.contact?.phone ?? undefined,
     ticketId,
   });
 
@@ -376,6 +377,9 @@ export async function runWhazingTurnTail(
   // uses it only for slow-tool acks (sendMessage + toggleTyping — both in InboxReplyClient).
   // buildNativeTools ignores ctx.client entirely; instead, it closes over the actual
   // WhazingClient and ticketId via the outer closure.
+  // Set by handoff_to_human when it sends a customerMessage directly — signals the tail below to
+  // skip deliverReply so the customer doesn't get the same "a human will take over" text twice.
+  let handoffMessageSent = false;
   const whazingNativeTools: ToolBuildDeps["buildNativeTools"] = (
     nativeCtx,
     allowed,
@@ -390,6 +394,9 @@ export async function runWhazingTurnTail(
         toolInstructions: nativeCtx.toolInstructions,
         pixConfig: loaded.pixConfig,
         handoffQueueId: loaded.handoffConfig.whazingQueueId,
+        onCustomerMessageSent: () => {
+          handoffMessageSent = true;
+        },
       },
       allowed,
     );
@@ -432,6 +439,17 @@ export async function runWhazingTurnTail(
     );
     const reply = lastAssistantText(result.messages).trim();
     if (!reply) return "empty";
+
+    // handoff_to_human already sent this turn's customer-facing message directly — the model's
+    // own final text is redundant (and, in production, was routinely a near-duplicate of it).
+    if (handoffMessageSent) {
+      emitFlowEvent(flow, {
+        stage: "handoff",
+        status: "ok",
+        detail: { outcome: "customer_message_already_sent" },
+      });
+      return "posted";
+    }
 
     // Re-check: did a human take over while the LLM was thinking?
     const ticket = await client.getTicket(ticketId).catch(() => null);

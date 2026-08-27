@@ -99,8 +99,13 @@ function normalizeContact(raw: unknown): NormalizedWhazingContact | null {
     id: coerceNum(c.id),
     name: str(c.name),
     phone: str(c.phone) ?? str(c.phoneNumber),
-    // waId is the WhatsApp LID used in the newer Whazing API
-    whatsappId: str(c.waId) ?? str(c.whatsappId) ?? str(c.jid),
+    // `lid` is the field name Whazing's own contact API and webhook payloads actually use for the
+    // WhatsApp LID (confirmed live, e.g. "126409561346102@lid") — waId/whatsappId/jid were the
+    // guessed field names this originally shipped with and have never matched a real payload,
+    // which silently broke contact-based thread continuity (every production thread fell back to
+    // the per-ticket key; a returning contact's new ticket never recalled the prior conversation).
+    // Keep the old names as a fallback in case another Whazing payload shape ever uses them.
+    whatsappId: str(c.lid) ?? str(c.waId) ?? str(c.whatsappId) ?? str(c.jid),
   };
 }
 

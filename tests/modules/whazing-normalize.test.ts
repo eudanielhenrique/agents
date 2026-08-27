@@ -125,7 +125,16 @@ describe("normalizeWhazingEvent", () => {
     expect(ev?.queueId).toBe(4);
   });
 
-  test("normalizes whatsappId from waId, whatsappId, or jid fields", () => {
+  test("normalizes whatsappId from lid, waId, whatsappId, or jid fields", () => {
+    // `lid` is the field Whazing's real payloads use (confirmed live) — checked first.
+    const lid = normalizeWhazingEvent({
+      event: "x",
+      ticketId: 1,
+      contact: { id: 10, lid: "126409561346102@lid" },
+      message: { fromMe: false },
+    });
+    expect(lid?.contact?.whatsappId).toBe("126409561346102@lid");
+
     const waId = normalizeWhazingEvent({
       event: "x",
       ticketId: 1,

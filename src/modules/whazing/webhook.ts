@@ -330,6 +330,7 @@ async function maybeConsumeWhazingCommandOrGate(params: {
   const threadId = resolveWhazingGraphThreadId(tenantId, instanceId, {
     whatsappId: normalized.contact?.whatsappId ?? undefined,
     contactId: normalized.contact?.id ?? undefined,
+    normalizedPhone: normalized.contact?.phone ?? undefined,
     ticketId,
   });
 
