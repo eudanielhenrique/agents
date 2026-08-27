@@ -9,6 +9,7 @@ import {
   isTurnInFlight,
   markTurnInFlight,
 } from "@/graph/inflight";
+import { recallFacts } from "@/graph/memory-store";
 import {
   type AgentConfig,
   buildCallbacks,
@@ -289,6 +290,30 @@ export async function runWhazingAgentTurn(
     }
   }
 
+  // Cross-thread contact memory (remember_fact) — a separate, simpler fact list the model itself
+  // chose to keep, distinct from the structured anamnesis block above. Only paid for when the tool
+  // is actually granted. Fails open: a read error here must not silence the whole turn.
+  if (
+    event.contact?.id != null &&
+    (!loaded.nativeToolsAllow ||
+      loaded.nativeToolsAllow.includes("remember_fact"))
+  ) {
+    const facts = await recallFacts([
+      "tenant",
+      String(tenantId),
+      "whazing",
+      String(instanceId),
+      "contact",
+      String(event.contact.id),
+    ]).catch(() => null);
+    if (facts && Object.keys(facts).length > 0) {
+      const known = Object.entries(facts)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join("; ");
+      text = `[Fatos memorizados sobre este contato: ${known}]\n\n${text}`;
+    }
+  }
+
   // Debounce path: an incoming message on a debounce-enabled agent buffers its rendered text into
   // the durable WHAZING_DEBOUNCE job instead of answering right away — the fast worker flushes it
   // (coalesce + one reply). Arming is best-effort: any failure falls back to the direct turn below
@@ -390,6 +415,7 @@ export async function runWhazingTurnTail(
         instanceId,
         ticketId,
         contactId,
+        tenantId,
         timezone: loaded.timezone,
         toolInstructions: nativeCtx.toolInstructions,
         pixConfig: loaded.pixConfig,

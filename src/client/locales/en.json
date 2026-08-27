@@ -1549,6 +1549,10 @@
       "desc": "React to the customer's last message with an emoji (WhatsApp reaction).",
       "label": "React with emoji"
     },
+    "remember_fact": {
+      "desc": "Save a short fact about this contact so future conversations recall it, even in a new ticket.",
+      "label": "Remember fact"
+    },
     "request_payment": {
       "desc": "Send a payment-request card for a specific amount, payable via the configured PIX key.",
       "label": "Request payment"

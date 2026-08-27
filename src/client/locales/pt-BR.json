@@ -1554,6 +1554,10 @@
       "desc": "Reage à última mensagem do cliente com um emoji (reação do WhatsApp).",
       "label": "Reagir com emoji"
     },
+    "remember_fact": {
+      "desc": "Salva um fato curto sobre este contato pra conversas futuras lembrarem, mesmo em um ticket novo.",
+      "label": "Lembrar fato"
+    },
     "request_payment": {
       "desc": "Envia um cartão de solicitação de pagamento para um valor específico, pagável pela chave PIX configurada.",
       "label": "Solicitar pagamento"

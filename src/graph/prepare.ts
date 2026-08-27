@@ -6,6 +6,7 @@ import type { PrismaClient } from "@/../generated/prisma/client";
 import { decryptJson } from "@/api/lib/crypto";
 import logger from "@/api/lib/logger";
 import config from "@/config";
+import { formatMemorySection, recallFacts } from "@/graph/memory-store";
 import { runScopedOn, type ScopedDb, type TenantContext } from "@/lib/tenancy";
 import { readLimitsConfig } from "@/modules/agents/limits";
 import { readToolGuidance } from "@/modules/agents/tool-guidance";
@@ -490,6 +491,30 @@ export async function loadAgentConfig(
             sel.nativeToolsAllow.includes("set_custom_attribute"),
         )
       : null;
+  // Cross-thread contact memory (remember_fact) — only paid for when the tool is actually granted,
+  // since it's an extra round-trip to the langgraph store's own pool. Fails open: a read error here
+  // must not silence the whole turn (same reasoning as appointmentSection below).
+  let memorySection: string | null = null;
+  if (
+    conv?.contact?.id != null &&
+    (!sel.nativeToolsAllow || sel.nativeToolsAllow.includes("remember_fact"))
+  ) {
+    try {
+      memorySection = formatMemorySection(
+        await recallFacts([
+          "tenant",
+          String(args.tenantId),
+          "contact",
+          String(conv.contact.id),
+        ]),
+      );
+    } catch (e) {
+      logger.warn(
+        "contact memory recall failed: %s",
+        e instanceof Error ? e.message : String(e),
+      );
+    }
+  }
   // NOTE: The LIVE appointments booked in THIS conversation, re-read from the reminder scheduler
   // rows on EVERY turn — including after the last reminder fired (job DONE, start still ahead), the
   // exact turn where the customer replies to it. loadAgentConfig is shared by the reactive turn, the
@@ -525,9 +550,11 @@ export async function loadAgentConfig(
       );
     }
   }
-  const promptSections = [attributeSection, appointmentSection].filter(
-    (s): s is string => s !== null,
-  );
+  const promptSections = [
+    attributeSection,
+    memorySection,
+    appointmentSection,
+  ].filter((s): s is string => s !== null);
   return {
     agentId: agent.id,
     agentBotId: bot?.chatwootAgentBotId ?? null,

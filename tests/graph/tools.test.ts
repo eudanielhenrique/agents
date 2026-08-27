@@ -467,6 +467,18 @@ describe("native tools", () => {
     // Nothing was written (no base/contact wired in this pure ctx).
     expect(calls).toEqual([]);
   });
+
+  test("remember_fact without a contact in ctx → safe message, no store call", async () => {
+    const { client } = recordingClient();
+    const tools = buildNativeTools({ client, conversationId: 7 });
+    const out = String(
+      await byName(tools, "remember_fact").invoke({
+        key: "preferencia_contato",
+        value: "prefere áudio",
+      }),
+    );
+    expect(out.toLowerCase()).toContain("no contact in scope");
+  });
 });
 
 describe("handoff targeting", () => {

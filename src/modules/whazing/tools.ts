@@ -2,6 +2,7 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import logger from "@/api/lib/logger";
+import { rememberFact } from "@/graph/memory-store";
 import {
   DEFAULT_TIMEZONE,
   formatHumanDateTime,
@@ -24,6 +25,9 @@ export interface WhazingToolCtx {
   instanceId: bigint;
   ticketId: number;
   contactId?: number;
+  // Needed only for remember_fact's namespace (cross-thread contact memory) — absent everywhere
+  // else in this file, which scopes writes to the Whazing ticket/contact instead of our tenant db.
+  tenantId?: bigint;
   timezone?: string;
   toolInstructions?: Partial<Record<string, string>>;
   // Operator-configured PIX key for send_pix_button / request_payment. null ⇒ those tools decline
@@ -186,6 +190,43 @@ function saveAnamnesisDataTool(ctx: WhazingToolCtx) {
             }),
           )
           .min(1),
+      }),
+    },
+  );
+}
+
+// Cross-thread contact memory (distinct from save_anamnesis_data, which writes structured intake
+// fields to the Whazing CONTACT itself, staff-visible there). This is a simpler, generic fact list
+// the model decides to keep on its own — namespaced by Whazing's own contact id, the same identity
+// resolveWhazingGraphThreadId's contact-based branch uses, so it survives a brand-new ticket for
+// the same WhatsApp contact.
+function rememberFactTool(ctx: WhazingToolCtx) {
+  return tool(
+    async ({ key, value }: { key: string; value: string }) => {
+      if (ctx.tenantId == null || ctx.contactId == null) {
+        return "Could not save (no contact in scope for this ticket).";
+      }
+      await rememberFact(
+        [
+          "tenant",
+          String(ctx.tenantId),
+          "whazing",
+          String(ctx.instanceId),
+          "contact",
+          String(ctx.contactId),
+        ],
+        key,
+        value,
+      );
+      return `Remembered "${key}".`;
+    },
+    {
+      name: "remember_fact",
+      description:
+        'Remember a short fact about this contact for future conversations (e.g. a preference or something they already told you), so you don\'t have to ask again. Use a short, stable `key` (e.g. "preferencia_contato") — saving the same key again overwrites the previous value instead of duplicating it.',
+      schema: z.object({
+        key: z.string().min(1),
+        value: z.string().min(1),
       }),
     },
   );
@@ -718,6 +759,7 @@ export const WHAZING_NATIVE_TOOL_NAMES = [
   "send_pix_button",
   "request_payment",
   "save_anamnesis_data",
+  "remember_fact",
 ] as const;
 
 export type WhazingNativeToolName = (typeof WHAZING_NATIVE_TOOL_NAMES)[number];
@@ -741,6 +783,7 @@ export function buildWhazingNativeTools(
     sendPixButtonTool(ctx),
     requestPaymentTool(ctx),
     saveAnamnesisDataTool(ctx),
+    rememberFactTool(ctx),
   ];
   if (!allowed) return all;
   const allow = new Set(allowed);

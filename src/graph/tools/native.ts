@@ -3,6 +3,7 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import type { PrismaClient } from "@/../generated/prisma/client";
 import logger from "@/api/lib/logger";
+import { rememberFact } from "@/graph/memory-store";
 import { failableTool, toolFailure } from "@/graph/tools/failure";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
 import { xmlAttr, xmlEscape } from "@/lib/xml";
@@ -566,6 +567,38 @@ function setCustomAttributeTool(ctx: ToolCtx) {
           .describe(
             `Where to store it: 'conversation' (default), 'contact'${taskScope ? ", or 'task'" : ""}.`,
           ),
+      }),
+    },
+  );
+}
+
+// Cross-thread contact memory (distinct from set_custom_attribute, which writes to Chatwoot's own
+// custom fields and is meant to be operator-visible there). This is a simpler, transport-agnostic
+// fact list the model itself decides to keep — namespaced by our own Contact.id, so it survives a
+// new Chatwoot conversation for the same contact (unlike the checkpointer's per-thread history).
+function rememberFactTool(ctx: ToolCtx) {
+  return tool(
+    async ({ key, value }: { key: string; value: string }) => {
+      if (ctx.tenantId == null || ctx.contactDbId == null) {
+        return "Could not save (no contact in scope for this conversation).";
+      }
+      await rememberFact(
+        ["tenant", String(ctx.tenantId), "contact", String(ctx.contactDbId)],
+        key,
+        value,
+      );
+      return `Remembered "${key}".`;
+    },
+    {
+      name: "remember_fact",
+      description: withOperatorNote(
+        'Remember a short fact about this contact for future conversations (e.g. a preference or something they already told you), so you don\'t have to ask again. Use a short, stable `key` (e.g. "preferencia_contato") — saving the same key again overwrites the previous value instead of duplicating it.',
+        ctx,
+        "remember_fact",
+      ),
+      schema: z.object({
+        key: z.string().min(1),
+        value: z.string().min(1),
       }),
     },
   );
@@ -1238,6 +1271,7 @@ export function buildNativeTools(
     handoffTool(ctx),
     privateNoteTool(ctx),
     setCustomAttributeTool(ctx),
+    rememberFactTool(ctx),
     assignLabelTool(ctx),
     resolveConversationTool(ctx),
     kanbanMoveTool(ctx),

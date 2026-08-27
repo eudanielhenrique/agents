@@ -3,6 +3,7 @@ import {
   ArrowRightLeft,
   Banknote,
   BellOff,
+  Brain,
   Calculator,
   CheckCircle2,
   ClipboardList,
@@ -46,6 +47,7 @@ export const NATIVE_TOOL_ICONS: Record<string, LucideIcon> = {
   send_pix_button: QrCode,
   request_payment: Banknote,
   save_anamnesis_data: ClipboardList,
+  remember_fact: Brain,
 };
 
 export interface NativeToolMeta {
@@ -227,6 +229,15 @@ export function nativeToolMeta(name: string, t: TFunction): NativeToolMeta {
         description: t(
           "nativeTools.save_anamnesis_data.desc",
           "Save patient intake/anamnesis fields as they come up in the conversation (Whazing only).",
+        ),
+      };
+    case "remember_fact":
+      return {
+        icon,
+        label: t("nativeTools.remember_fact.label", "Remember fact"),
+        description: t(
+          "nativeTools.remember_fact.desc",
+          "Save a short fact about this contact so future conversations recall it, even in a new ticket.",
         ),
       };
     default:
