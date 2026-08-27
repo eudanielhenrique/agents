@@ -106,6 +106,9 @@ const realSleep = (ms: number): Promise<void> =>
 
 // Sends the reply, split + paced when enabled. Typing toggles are best-effort (admin-token, may be
 // unsupported on a channel) and never block the send. The sleep is injectable for tests.
+// onChunkSent fires after EACH balloon (not just once at the end) — Whazing's echo-vs-human-takeover
+// guard (bot-send-tracker.ts) needs to know a send happened before that balloon's echo can round-trip
+// back through the webhook, not after the whole multi-balloon delivery finishes.
 export async function deliverReply(
   client: InboxReplyClient,
   conversationId: number,
@@ -113,6 +116,7 @@ export async function deliverReply(
   cfg: SplitConfig,
   sleep: (ms: number) => Promise<void> = realSleep,
   flow?: FlowContext,
+  onChunkSent?: (conversationId: number) => void,
 ): Promise<number> {
   return withFlowStage(
     flow,
@@ -121,6 +125,7 @@ export async function deliverReply(
     async () => {
       if (!cfg.enabled) {
         await client.sendMessage(conversationId, reply);
+        onChunkSent?.(conversationId);
         return 1;
       }
       const chunks = splitReply(reply, cfg);
@@ -128,6 +133,7 @@ export async function deliverReply(
         await client.toggleTyping(conversationId, true).catch(() => undefined);
         await sleep(typingDelayMs(chunk, cfg));
         await client.sendMessage(conversationId, chunk);
+        onChunkSent?.(conversationId);
       }
       await client.toggleTyping(conversationId, false).catch(() => undefined);
       return chunks.length;

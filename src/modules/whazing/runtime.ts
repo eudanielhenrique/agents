@@ -499,8 +499,8 @@ export async function runWhazingTurnTail(
       loaded.splitConfig,
       undefined,
       flow,
+      () => markBotSent(instanceId, ticketId),
     );
-    markBotSent(instanceId, ticketId);
     logger.info(
       "whazing agent replied: ticket=%s thread=%s len=%d",
       String(ticketId),
