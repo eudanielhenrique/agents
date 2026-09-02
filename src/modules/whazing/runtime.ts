@@ -486,6 +486,21 @@ export async function runWhazingTurnTail(
   // Set by handoff_to_human when it sends a customerMessage directly — signals the tail below to
   // skip deliverReply so the customer doesn't get the same "a human will take over" text twice.
   let handoffMessageSent = false;
+
+  // Grounds save_anamnesis_data's description in the field names this contact already has, so the
+  // model reuses them instead of inventing near-duplicates ("Motivo" vs "Motivo do contato") that
+  // fragment the same information across keys. Best-effort — a failed fetch just means the tool
+  // description falls back to its generic examples, never blocks the turn.
+  const knownAnamnesisFields =
+    contactId != null &&
+    (!loaded.nativeToolsAllow ||
+      loaded.nativeToolsAllow.includes("save_anamnesis_data"))
+      ? await client
+          .getContact(contactId)
+          .then((c) => [...new Set((c?.extraInfo ?? []).map((f) => f.name))])
+          .catch(() => undefined)
+      : undefined;
+
   const whazingNativeTools: ToolBuildDeps["buildNativeTools"] = (
     nativeCtx,
     allowed,
@@ -501,6 +516,7 @@ export async function runWhazingTurnTail(
         toolInstructions: nativeCtx.toolInstructions,
         pixConfig: loaded.pixConfig,
         handoffQueueId: loaded.handoffConfig.whazingQueueId,
+        knownAnamnesisFields,
         onCustomerMessageSent: () => {
           handoffMessageSent = true;
         },

@@ -22,7 +22,12 @@ function fakeClient(initialExtraInfo: Array<{ name: string; value: string }>) {
   return { client, updateCalls };
 }
 
-function findTool(ticketId: number, client: unknown, contactId: number) {
+function findTool(
+  ticketId: number,
+  client: unknown,
+  contactId: number,
+  knownAnamnesisFields?: string[],
+) {
   const tools = buildWhazingNativeTools(
     {
       // biome-ignore lint/suspicious/noExplicitAny: minimal fake — only getContact/updateContactExtraInfo are called
@@ -30,6 +35,7 @@ function findTool(ticketId: number, client: unknown, contactId: number) {
       instanceId: 1n,
       ticketId,
       contactId,
+      knownAnamnesisFields,
     },
     ["save_anamnesis_data"],
   );
@@ -78,5 +84,18 @@ describe("save_anamnesis_data", () => {
     const result = await t.invoke({ fields: [{ name: "X", value: "Y" }] });
     expect(result).toContain("No contact id");
     expect(updateCalls).toHaveLength(0);
+  });
+
+  test("description names existing fields so the model reuses them instead of inventing near-duplicates", () => {
+    const { client } = fakeClient([]);
+    const t = findTool(4, client, 44, ["Motivo", "Duração"]);
+    expect(t.description).toContain("Motivo, Duração");
+    expect(t.description).toContain("reuse the existing name verbatim");
+  });
+
+  test("description has no field-reuse note when the contact has no known fields yet", () => {
+    const { client } = fakeClient([]);
+    const t = findTool(5, client, 45);
+    expect(t.description).not.toContain("reuse the existing name verbatim");
   });
 });

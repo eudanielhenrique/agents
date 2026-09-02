@@ -43,6 +43,12 @@ export interface WhazingToolCtx {
   // otherwise the customer gets that same "a human will take over" message twice: once here, once
   // via the normal deliverReply at the end of the turn.
   onCustomerMessageSent?: () => void;
+  // Field names already present on this contact's extraInfo (save_anamnesis_data's own storage) —
+  // grounds the tool's description so the model reuses an existing name instead of inventing a
+  // near-duplicate ("Motivo" vs "Motivo do contato") that fragments the same information across two
+  // keys. Whazing has no schema/registry for these field names (unlike Chatwoot's custom attribute
+  // definitions, see chatwoot/vocab.ts) — this is only ever what's already on THIS contact.
+  knownAnamnesisFields?: string[];
 }
 
 function handoffToHumanTool(ctx: WhazingToolCtx) {
@@ -180,7 +186,10 @@ function saveAnamnesisDataTool(ctx: WhazingToolCtx) {
     {
       name: "save_anamnesis_data",
       description:
-        'Save one or more pieces of patient intake/anamnesis data as they come up in the conversation (e.g. {name:"Motivo",value:"Dor de cabeça recorrente"}, {name:"Duração",value:"3 dias"}). Call this RIGHT AFTER the patient answers each question — do not wait until the end. Existing fields with the same name are overwritten; anything not mentioned here is left alone.',
+        'Save one or more pieces of patient intake/anamnesis data as they come up in the conversation (e.g. {name:"Motivo",value:"Dor de cabeça recorrente"}, {name:"Duração",value:"3 dias"}). Call this RIGHT AFTER the patient answers each question — do not wait until the end. Existing fields with the same name are overwritten; anything not mentioned here is left alone.' +
+        (ctx.knownAnamnesisFields?.length
+          ? ` This contact already has these field names saved: ${ctx.knownAnamnesisFields.join(", ")}. When the new information is the same KIND of thing, reuse the existing name verbatim (same spelling/case) instead of inventing a new one — a slightly different name creates a duplicate field instead of updating the existing one.`
+          : ""),
       schema: z.object({
         fields: z
           .array(
