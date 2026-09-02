@@ -4,6 +4,8 @@ import basePrisma from "@/api/lib/prisma";
 import { getCheckpointer } from "@/graph/checkpointer";
 import { AppError, UnauthorizedError } from "@/lib/errors";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
+import { parseWindows } from "../business-hours/hours";
+import { outOfHoursGate } from "../chatwoot/webhook";
 import { wasRecentlyBotSent } from "./bot-send-tracker";
 import { resolveWhazingInboxAndAgent } from "./inbox-resolve";
 import { loadWhazingClient, resolveInstanceByRouteToken } from "./instance";
@@ -336,14 +338,23 @@ async function maybeConsumeWhazingCommandOrGate(params: {
   const agentId = inbox.agentId;
 
   const agent = await runScopedOn(base, sysCtx(tenantId), (db) =>
-    db.agent.findUnique({ where: { id: agentId }, select: { mode: true } }),
+    db.agent.findUnique({
+      where: { id: agentId },
+      select: { mode: true, businessHoursId: true },
+    }),
   );
   if (!agent) return false;
   // Hot-path skip: the overwhelming majority of traffic is a production-mode agent with no control
-  // command — nothing below applies, so avoid the extra mirror upsert + read on every message. A
-  // production agent that later gets switched to "test" starts silenced from its next message on
-  // (no row means "not activated"), which is the safe direction to be wrong in.
-  if (agent.mode !== "test" && command === null) return false;
+  // command and no Availability schedule — nothing below applies, so avoid the extra mirror upsert +
+  // read on every message. A production agent that later gets switched to "test" (or gets a schedule
+  // attached) starts silenced from its next message on (no row means "not activated"/"no notice
+  // sent yet"), which is the safe direction to be wrong in.
+  if (
+    agent.mode !== "test" &&
+    agent.businessHoursId === null &&
+    command === null
+  )
+    return false;
   // Control commands only apply to a test-mode agent (mirrors Chatwoot's commandActive) — on a
   // production agent, "/teste"/"/reset" are just ordinary text, answered normally.
   const commandActive = command !== null && agent.mode === "test";
@@ -378,7 +389,11 @@ async function maybeConsumeWhazingCommandOrGate(params: {
       where: {
         tenantId_instanceId_ticketId: { tenantId, instanceId, ticketId },
       },
-      select: { testActivatedAt: true, testNoticeSentAt: true },
+      select: {
+        testActivatedAt: true,
+        testNoticeSentAt: true,
+        outOfHoursNoticeSentAt: true,
+      },
     }),
   );
   const testActivatedAt = existing?.testActivatedAt ?? null;
@@ -445,6 +460,50 @@ async function maybeConsumeWhazingCommandOrGate(params: {
       );
     }
     return true;
+  }
+
+  // Availability gate — Whazing counterpart of Chatwoot's outOfHoursGate (chatwoot/webhook.ts).
+  // The agent's businessHoursId schedule gates REACTIVE replies: outside the configured window the
+  // agent stays silent. No schedule = always on (never silenced). Whazing has no real private-note
+  // endpoint (sendPrivateNote is a best-effort no-op, see docs/whazing.md) so the notice is mostly
+  // an audit watermark, not an operator-visible alert — the silence itself is the actual fix.
+  if (agent.businessHoursId !== null) {
+    const bh = await runScopedOn(base, sysCtx(tenantId), (db) =>
+      db.businessHours.findUnique({
+        where: { id: agent.businessHoursId as bigint },
+        select: { windows: true, timezone: true },
+      }),
+    );
+    const hours = bh
+      ? { windows: parseWindows(bh.windows), timezone: bh.timezone }
+      : null;
+    const availability = outOfHoursGate(
+      hours,
+      new Date(),
+      existing?.outOfHoursNoticeSentAt != null,
+    );
+    if (availability.silence) {
+      if (availability.postNote) {
+        await client
+          .sendPrivateNote(
+            ticketId,
+            "🌙 Mensagem recebida fora do horário de atendimento. O agente não respondeu automaticamente; ele volta a responder no próximo horário disponível.",
+          )
+          .catch((e) => {
+            logger.warn(
+              { ticketId, error: e },
+              "whazing: out-of-hours notice failed (non-fatal)",
+            );
+          });
+        await runScopedOn(base, sysCtx(tenantId), (db) =>
+          db.whazingConversation.updateMany({
+            where: { tenantId, instanceId, ticketId },
+            data: { outOfHoursNoticeSentAt: new Date() },
+          }),
+        );
+      }
+      return true;
+    }
   }
 
   return false;

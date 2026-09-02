@@ -458,6 +458,11 @@ model WhazingConversation {
   // one-shot "this agent is in test mode" note.
   testActivatedAt  DateTime? @map("test_activated_at")
   testNoticeSentAt DateTime? @map("test_notice_sent_at")
+  // Mirrors Conversation.outOfHoursNoticeSentAt (Chatwoot) — the agent's Availability schedule
+  // (Agent.businessHoursId) gates REACTIVE replies outside its windows; this is the anti-spam
+  // watermark for the one-shot notice (best-effort, Whazing has no real private-note endpoint —
+  // see docs/whazing.md — so this is mostly an audit trail, not an operator-visible alert).
+  outOfHoursNoticeSentAt DateTime? @map("out_of_hours_notice_sent_at")
   // Watermark for the follow-up (reengagement) sequence — mirrors Conversation.lastFollowUpAt.
   lastFollowUpAt DateTime? @map("last_follow_up_at")
   createdAt      DateTime  @default(now()) @map("created_at")
