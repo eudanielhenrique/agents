@@ -198,6 +198,28 @@ export async function processWhazingDelivery(
       return;
     }
 
+    // Diagnostic only (2026-08-31, tenant 4/Dr Eduardo: bot answered mid-conversation while a
+    // human — Anna — was actively typing; humanTakeoverAt lagged her first manual message by
+    // over 3 minutes for an unconfirmed reason). A fromMe:true message that reaches here without
+    // tripping the takeover above is either a genuine bot echo (expected, no log) or an
+    // unexplained miss (worth seeing next time it happens) — logging the raw sendType lets us
+    // tell them apart without storing message content.
+    if (
+      normalized.message?.fromMe &&
+      !isManualHumanReply(normalized) &&
+      normalized.ticketId != null &&
+      !wasRecentlyBotSent(instanceId, normalized.ticketId)
+    ) {
+      logger.warn(
+        {
+          ticketId: normalized.ticketId,
+          sendType: normalized.sendType,
+          isAutomation: normalized.message.isAutomation,
+        },
+        "whazing: fromMe message did not trigger human-takeover detection (not a recent bot send either)",
+      );
+    }
+
     // Double-gate: skip events that carry no actionable customer message.
     if (
       !isNewIncomingMessage(normalized) ||

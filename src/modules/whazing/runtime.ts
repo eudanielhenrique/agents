@@ -10,6 +10,7 @@ import {
   markTurnInFlight,
 } from "@/graph/inflight";
 import { recallFacts } from "@/graph/memory-store";
+import { createChatModel } from "@/graph/models";
 import {
   type AgentConfig,
   buildCallbacks,
@@ -19,10 +20,12 @@ import {
   type ToolBuildDeps,
 } from "@/graph/prepare";
 import type { RunAgentTurnOutcome } from "@/graph/runtime";
+import { ToolFlowLogger } from "@/graph/tool-flowlog";
 import { AppError } from "@/lib/errors";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
 import type { ChatwootClient } from "@/modules/chatwoot/client";
 import { emitFlowEvent, type FlowContext } from "@/modules/flowlog/service";
+import { analyzeGuardrail } from "@/modules/guardrails/analyze";
 import { deliverReply } from "@/modules/split/service";
 import { markBotSent } from "@/modules/whazing/bot-send-tracker";
 import { looksLikePersonName } from "@/modules/whazing/contact-name";
@@ -390,13 +393,91 @@ export async function runWhazingTurnTail(
     ticketId,
     threadId,
     loaded,
-    text,
     client,
     contactId,
     whazingConvId,
     flow,
     base,
   } = params;
+  const { text } = params;
+
+  // Guardrails (input/output moderation): mirrors graph/runtime.ts:383-460 exactly — config is
+  // already resolved by loadAgentConfig regardless of transport, only the application logic was
+  // missing here. postPrivateNote is a no-op on Whazing today (no real internal-note endpoint, see
+  // WhazingClient.sendPrivateNote) — the block/replace still works, only the operator-facing
+  // explanation doesn't surface anywhere yet.
+  const gr = loaded.guardrails;
+  const guardrailModel =
+    gr.enabled && loaded.guardrailsApiKey
+      ? createChatModel({
+          provider: gr.provider,
+          model: gr.model,
+          baseURL:
+            loaded.guardrailsCredentialBaseUrl ?? gr.baseURL ?? undefined,
+          apiKey: loaded.guardrailsApiKey,
+          temperature: 0,
+        })
+      : null;
+  const runGuardrail = async (
+    direction: "input" | "output",
+    subject: string,
+  ): Promise<{ reply: string | null } | null> => {
+    const dir = gr[direction];
+    if (!guardrailModel || !dir.enabled) return null;
+    const verdict = await analyzeGuardrail(guardrailModel, {
+      direction,
+      text: subject,
+      checks: dir.checks,
+      competitors: gr.competitors,
+      customPolicy: gr.customPolicy,
+      systemPrompt: direction === "output" ? loaded.systemPrompt : undefined,
+      customerMessage: direction === "output" ? text : undefined,
+      generationPrompt:
+        dir.action === "generated" ? dir.generationPrompt : undefined,
+    });
+    if (verdict.error) {
+      emitFlowEvent(flow, {
+        stage: "guardrail",
+        status: "error",
+        level: "warn",
+        detail: { direction, outcome: "analysis_failed" },
+        errorMessage: verdict.error,
+      });
+    }
+    if (!verdict.violated) return null;
+    emitFlowEvent(flow, {
+      stage: "guardrail",
+      status: "ok",
+      level: "warn",
+      detail: {
+        direction,
+        action: dir.action,
+        categories: verdict.categories,
+        rationale: verdict.rationale,
+      },
+    });
+    await client
+      .sendPrivateNote(
+        ticketId,
+        `Guardrail (${direction}): ${verdict.categories.join(", ") || "policy"} — ${dir.action}. ${verdict.rationale}`,
+      )
+      .catch(() => {});
+    if (dir.action === "silent") return { reply: null };
+    return {
+      reply:
+        dir.action === "generated"
+          ? (verdict.suggestedReply ?? dir.templateMessage)
+          : dir.templateMessage,
+    };
+  };
+
+  const inGuard = await runGuardrail("input", text);
+  if (inGuard) {
+    if (inGuard.reply === null) return "blocked";
+    await client.sendMessage(ticketId, inGuard.reply);
+    markBotSent(instanceId, ticketId);
+    return "posted";
+  }
 
   // buildToolset with Whazing-native tools. The ctx.client cast is safe: buildToolset
   // uses it only for slow-tool acks (sendMessage + toggleTyping — both in InboxReplyClient).
@@ -449,6 +530,17 @@ export async function runWhazingTurnTail(
         status: "ok",
         detail: { toolLimitHit: maxToolCalls, toolCalls },
       }),
+    // A turn recovered from an empty provider response must not read like a clean one — see
+    // graph/runtime.ts's onModelRetry (issue #63).
+    onModelRetry: ({ attempt }) =>
+      emitFlowEvent(flow, {
+        stage: "generate",
+        level: "warn",
+        status: "ok",
+        provider: loaded.mc.provider,
+        model: loaded.mc.model,
+        detail: { retriedEmptyResponse: attempt },
+      }),
   });
   const callbacks = buildCallbacks(loaded, {
     tenantId,
@@ -457,13 +549,22 @@ export async function runWhazingTurnTail(
     turnId: flow.turnId,
     tools,
   });
+  // Logs each tool call (name/status/duration) under this turn's flow group — without this, no
+  // handoff/save_anamnesis_data/kanban/etc call left any trace on the Logs page for Whazing.
+  const toolLogger = new ToolFlowLogger(flow, {
+    logValues: loaded.logToolValues,
+    tools,
+  });
 
   try {
     const result = await graph.invoke(
       { messages: [new HumanMessage(text)] },
-      { configurable: { thread_id: threadId }, callbacks },
+      {
+        configurable: { thread_id: threadId },
+        callbacks: [...callbacks, toolLogger],
+      },
     );
-    const reply = lastAssistantText(result.messages).trim();
+    let reply = lastAssistantText(result.messages).trim();
     if (!reply) return "empty";
 
     // handoff_to_human already sent this turn's customer-facing message directly — the model's
@@ -477,19 +578,42 @@ export async function runWhazingTurnTail(
       return "posted";
     }
 
-    // Re-check: did a human take over while the LLM was thinking?
-    const ticket = await client.getTicket(ticketId).catch(() => null);
-    if (ticket) {
+    // Re-check: did a human take over while the LLM was thinking? Two independent signals —
+    // Whazing's own live ticket state (assignedUserId/status, can lag behind an out-of-band queue
+    // move) AND our own humanTakeoverAt flag (set synchronously by the webhook the instant a
+    // manual reply is detected, see webhook.ts's recordHumanTakeover). Checking only the former
+    // missed a real case (2026-08-31, tenant 4): a human's manual replies didn't move the Whazing
+    // ticket's assignedUserId in time, and our own flag — the faster local signal — wasn't being
+    // consulted here at all.
+    const [ticket, takeoverRow] = await Promise.all([
+      client.getTicket(ticketId).catch(() => null),
+      runScopedOn(base, sysCtx(tenantId), (db) =>
+        db.whazingConversation.findUnique({
+          where: {
+            tenantId_instanceId_ticketId: { tenantId, instanceId, ticketId },
+          },
+          select: { humanTakeoverAt: true },
+        }),
+      ).catch(() => null),
+    ]);
+    const ticketSaysTakenOver = (() => {
+      if (!ticket) return false;
       const t = ticket as Record<string, unknown>;
-      const takenOver = t.assignedUserId != null || t.status === "closed";
-      if (takenOver) {
-        emitFlowEvent(flow, {
-          stage: "handoff",
-          status: "ok",
-          detail: { outcome: "taken_over" },
-        });
-        return "taken-over";
-      }
+      return t.assignedUserId != null || t.status === "closed";
+    })();
+    if (ticketSaysTakenOver || takeoverRow?.humanTakeoverAt != null) {
+      emitFlowEvent(flow, {
+        stage: "handoff",
+        status: "ok",
+        detail: { outcome: "taken_over" },
+      });
+      return "taken-over";
+    }
+
+    const outGuard = await runGuardrail("output", reply);
+    if (outGuard) {
+      if (outGuard.reply === null) return "blocked";
+      reply = outGuard.reply;
     }
 
     await deliverReply(
