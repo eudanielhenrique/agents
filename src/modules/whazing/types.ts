@@ -56,6 +56,11 @@ export interface WhazingCampaignSignal {
   ctwaClid: string | null;
   sourceId: string | null;
   sourceApp: string | null;
+  // The ad creative's own title/body (Meta's externalAdReply) — what the customer actually saw
+  // before tapping "send message", so the agent can ground its opening reply in the specific offer
+  // instead of asking the customer to repeat it.
+  adTitle: string | null;
+  adBody: string | null;
 }
 
 export interface NormalizedWhazingEvent {

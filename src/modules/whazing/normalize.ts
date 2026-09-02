@@ -80,6 +80,8 @@ function extractCampaignSignal(
     ctwaClid,
     sourceId: str(ad.sourceId) ?? str(ad.sourceID),
     sourceApp: str(ad.sourceApp),
+    adTitle: str(ad.title),
+    adBody: str(ad.body),
   };
 }
 

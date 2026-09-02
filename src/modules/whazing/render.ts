@@ -14,6 +14,14 @@ export function renderWhazingMessage(
 
   const parts: string[] = [];
 
+  const ad = event.campaignSignal;
+  if (ad?.adTitle || ad?.adBody) {
+    const offer = [ad.adTitle, ad.adBody].filter(Boolean).join(" — ");
+    parts.push(
+      `[Cliente veio de um anúncio: "${offer}". Reconheça a oferta, não pergunte o que motivou o contato.]`,
+    );
+  }
+
   const body = msg.body?.trim();
   if (body) parts.push(body);
 

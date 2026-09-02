@@ -399,6 +399,43 @@ describe("google calendar toolpack — per-contact isolation", () => {
     expect(body.attendees).toBeUndefined();
   });
 
+  test("create with attendeeEmail invites the customer and asks Google to send the update", async () => {
+    const { impl, calls } = stubFetch(200, { id: "ev_1" });
+    await toolFor(
+      "calendar_create_event",
+      {},
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke({
+      summary: "Demonstração",
+      start: "2026-06-20T14:00:00-03:00",
+      end: "2026-06-20T15:00:00-03:00",
+      attendeeEmail: "lead@example.com",
+    });
+    const call = calls[0] as { url: string; init: RequestInit };
+    const body = bodyOf(call);
+    expect(body.attendees).toEqual([{ email: "lead@example.com" }]);
+    expect(new URL(call.url, "https://x").searchParams.get("sendUpdates")).toBe(
+      "all",
+    );
+  });
+
+  test("create without attendeeEmail never sets sendUpdates", async () => {
+    const { impl, calls } = stubFetch(200, { id: "ev_1" });
+    await toolFor(
+      "calendar_create_event",
+      {},
+      baseCtx({ fetchImpl: impl }),
+    )?.invoke({
+      summary: "Demonstração",
+      start: "2026-06-20T14:00:00-03:00",
+      end: "2026-06-20T15:00:00-03:00",
+    });
+    const call = calls[0] as { url: string; init: RequestInit };
+    expect(new URL(call.url, "https://x").searchParams.has("sendUpdates")).toBe(
+      false,
+    );
+  });
+
   test("create with no contact in scope → fails closed, no fetch", async () => {
     const { impl, calls } = stubFetch(200, { id: "ev_1" });
     const out = (await toolFor(

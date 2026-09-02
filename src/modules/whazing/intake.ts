@@ -17,7 +17,7 @@ import {
   readWhazingIntakeConfig,
   type WhazingIntakeConfig,
 } from "./intake-settings";
-import type { NormalizedWhazingEvent } from "./types";
+import type { NormalizedWhazingEvent, WhazingTicketStatus } from "./types";
 
 function sysCtx(tenantId: bigint): TenantContext {
   return { tenantId, userId: null, role: "TENANT_ADMIN" };
@@ -57,6 +57,21 @@ async function findIntakeInbox(
     );
   }
   return candidates[0] ?? null;
+}
+
+// Whether this contact has an ONGOING other conversation — the actual reason to escalate instead
+// of letting the bot answer. Only an OPEN/PENDING other ticket counts: a CLOSED one (even from
+// minutes ago) is a finished conversation, not a human currently owning this contact. Counting
+// closed tickets here would permanently escalate every future message from any returning
+// contact — including one who was fully served before and is now writing in about something new —
+// to a queue nobody may be watching, silently dropping them forever (see bug 2026-08-28, tenant
+// boraautomatizar: a repeat tester's phone had only closed history and never got a bot reply
+// again).
+export function hasActivePriorHistory(
+  ticketId: number,
+  history: Array<{ id: number; status: WhazingTicketStatus }>,
+): boolean {
+  return history.some((t) => t.id !== ticketId && t.status !== "closed");
 }
 
 // Whazing's /ticket/:id return shape is `unknown` at the client boundary (see getTicket) — this
@@ -126,7 +141,7 @@ export async function runWhazingIntake(
   if (phone) {
     try {
       const history = await client.listTicketsByPhone(phone);
-      const hasPriorHistory = history.some((t) => t.id !== ticketId);
+      const hasPriorHistory = hasActivePriorHistory(ticketId, history);
       const currentFromHistory = history.find((t) => t.id === ticketId);
       const alreadyAnswered =
         currentFromHistory?.answered === true ||

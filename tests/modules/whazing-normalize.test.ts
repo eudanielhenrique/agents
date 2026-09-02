@@ -8,6 +8,7 @@ import {
   whazingControlCommand,
   whazingDeliveryId,
 } from "@/modules/whazing/normalize";
+import { renderWhazingMessage } from "@/modules/whazing/render";
 import {
   WHAZING_WEBHOOK_MOUNT,
   whazingWebhookUrl,
@@ -512,6 +513,8 @@ describe("normalizeWhazingEvent campaignSignal", () => {
                 ctwaClid: "AbCd1234",
                 sourceId: "120210000000000",
                 sourceApp: "AN",
+                title: "Instituto Dr. Eduardo Jório",
+                body: "Consultas de Medicina Integrativa",
               },
             },
           },
@@ -522,6 +525,8 @@ describe("normalizeWhazingEvent campaignSignal", () => {
       ctwaClid: "AbCd1234",
       sourceId: "120210000000000",
       sourceApp: "AN",
+      adTitle: "Instituto Dr. Eduardo Jório",
+      adBody: "Consultas de Medicina Integrativa",
     });
   });
 
@@ -542,5 +547,59 @@ describe("normalizeWhazingEvent campaignSignal", () => {
       }),
     });
     expect(ev?.campaignSignal?.ctwaClid).toBe("XyZ789");
+  });
+});
+
+describe("renderWhazingMessage campaign ad context", () => {
+  test("prepends the ad offer when the event carries adTitle/adBody", () => {
+    const rendered = renderWhazingMessage({
+      event: "message_received",
+      ticketId: 1,
+      queueId: null,
+      assignedUserId: null,
+      status: "pending",
+      sendType: null,
+      campaignSignal: {
+        ctwaClid: "AbCd1234",
+        sourceId: "1",
+        sourceApp: "AN",
+        adTitle: "Instituto Dr. Eduardo Jório",
+        adBody: "Consultas de Medicina Integrativa",
+      },
+      contact: null,
+      message: {
+        id: "m1",
+        body: "Olá! Vi o anúncio de vocês",
+        fromMe: false,
+        isAutomation: false,
+        attachments: [],
+        timestamp: null,
+      },
+    });
+    expect(rendered).toBe(
+      '[Cliente veio de um anúncio: "Instituto Dr. Eduardo Jório — Consultas de Medicina Integrativa". Reconheça a oferta, não pergunte o que motivou o contato.]\nOlá! Vi o anúncio de vocês',
+    );
+  });
+
+  test("omits the ad line when there is no campaign signal", () => {
+    const rendered = renderWhazingMessage({
+      event: "message_received",
+      ticketId: 1,
+      queueId: null,
+      assignedUserId: null,
+      status: "pending",
+      sendType: null,
+      campaignSignal: null,
+      contact: null,
+      message: {
+        id: "m1",
+        body: "oi",
+        fromMe: false,
+        isAutomation: false,
+        attachments: [],
+        timestamp: null,
+      },
+    });
+    expect(rendered).toBe("oi");
   });
 });

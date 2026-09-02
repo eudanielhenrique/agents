@@ -551,6 +551,13 @@ const CREATE_EVENT_SCHEMA = z.object({
     .describe("Start, ISO 8601 datetime (timed) or YYYY-MM-DD (all-day)."),
   end: z.string().min(1).describe("End, same format as start."),
   description: z.string().max(2000).optional().describe("Event details."),
+  attendeeEmail: z
+    .string()
+    .email()
+    .optional()
+    .describe(
+      "The CUSTOMER's own email, ONLY if they gave it in this conversation. When set, Google emails them a real calendar invite for this appointment. Never invent an email or use one for anyone other than the customer you are booking this appointment for.",
+    ),
   calendarId: z.string().optional().describe(CALENDAR_ID_DESC),
 });
 
@@ -856,6 +863,7 @@ function buildCreateEventTool(
       start: string;
       end: string;
       description?: string;
+      attendeeEmail?: string;
       calendarId?: string;
     }) => {
       const stamp = contactStamp(ctx);
@@ -870,6 +878,9 @@ function buildCreateEventTool(
         start: toEventTime(input.start, timeZone),
         end: toEventTime(input.end, timeZone),
         ...(input.description ? { description: input.description } : {}),
+        ...(input.attendeeEmail
+          ? { attendees: [{ email: input.attendeeEmail }] }
+          : {}),
         // Owner stamp injected from context, never from the model: locks this appointment to the contact.
         extendedProperties: { private: { [SECV4_CONTACT_KEY]: stamp } },
         // NOTE: a Meet room for the appointment. requestId MUST be unique per event: Google returns the
@@ -885,12 +896,18 @@ function buildCreateEventTool(
             }
           : {}),
       };
+      // NOTE: without conferenceDataVersion=1 the API IGNORES conferenceData in silence — no error, no
+      // room. Without sendUpdates=all, Google silently skips emailing the attendee — the invite is the
+      // whole point of attendeeEmail, so it is only ever set (never "none") when an attendee is present.
+      // Both are easy to lose in a refactor; pinned by tests.
+      const createParams = new URLSearchParams();
+      if (meetEnabled) createParams.set("conferenceDataVersion", "1");
+      if (input.attendeeEmail) createParams.set("sendUpdates", "all");
+      const createQuery = createParams.toString();
       let res: GcalResponse;
       try {
         res = await gcalFetch(
-          // NOTE: without conferenceDataVersion=1 the API IGNORES conferenceData in silence — no error,
-          // no room. Easy to lose in a refactor; pinned by tests.
-          `/calendars/${encodeURIComponent(calendarId)}/events${meetEnabled ? "?conferenceDataVersion=1" : ""}`,
+          `/calendars/${encodeURIComponent(calendarId)}/events${createQuery ? `?${createQuery}` : ""}`,
           { method: "POST", token, body },
           ctx,
         );
@@ -955,7 +972,7 @@ function buildCreateEventTool(
     {
       name: "calendar_create_event",
       description: withCalendarContext(
-        `Create an appointment for THIS customer on the calendar (it is automatically tagged to this customer, so only they can later see or change it). Provide a summary plus start and end. Use ISO 8601 with an offset for timed events (e.g. 2026-06-20T14:00:00-03:00) or a bare date (2026-06-20) for an all-day event. Returns the created appointment's id and links${meetEnabled ? "; share meetLink (the Google Meet room) with the customer — htmlLink is only the calendar page" : ""}.`,
+        `Create an appointment for THIS customer on the calendar (it is automatically tagged to this customer, so only they can later see or change it). Provide a summary plus start and end. Use ISO 8601 with an offset for timed events (e.g. 2026-06-20T14:00:00-03:00) or a bare date (2026-06-20) for an all-day event. Pass attendeeEmail when the customer gave their email for this appointment — Google then emails them a real calendar invite; omit it if they did not give one, never guess or reuse an email from earlier in the conversation for something unrelated. Returns the created appointment's id and links${meetEnabled ? "; share meetLink (the Google Meet room) with the customer — htmlLink is only the calendar page" : ""}.`,
         calendarContextXml(allowed, labels),
       ),
       schema: calendarArgSchema(CREATE_EVENT_SCHEMA, allowed),
