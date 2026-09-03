@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
+import logger from "@/api/lib/logger";
 import { assertSafeOutboundUrl } from "@/lib/ssrf";
 import type { InboxReplyClient } from "@/lib/transport/inbox-client";
 import type { WhazingTicketStatus } from "./types";
+
+// Daniel's own wrapper (agendamento-api), fixed — the SAME single self-hosted Whazing install
+// serves every one of his tenants (confirmed 2026-09-03: all 3 production tenants' tickets live
+// in one Postgres, one ApiConfigs table), and this is the only wrapper deployment. Not per-tenant
+// config because there's only ever one.
+const NOTE_API_BASE = "https://agendamento.boraautomatizar.com.br";
 
 // Whazing API client. Implements InboxReplyClient for the shared agent runtime.
 //
@@ -146,13 +153,39 @@ export class WhazingClient implements InboxReplyClient {
     });
   }
 
-  // Whazing has no native private-note concept. Previously this fell back to sendMessage,
-  // which leaked LLM-internal summaries (sometimes including patient health details) straight
-  // to the customer's WhatsApp thread. Until Whazing ships a real internal-note endpoint, the
-  // note is dropped rather than sent anywhere — the queue assignment in handoff_to_human is
-  // the actual signal to staff; they can read the transcript themselves for context.
-  sendPrivateNote(_ticketId: number, _text: string): Promise<unknown> {
-    return Promise.resolve(null);
+  // Whazing has no OFFICIAL private-note endpoint, but its panel has a real "internal note on
+  // ticket" feature (writes to its own TicketNotes table, rendered in the ticket timeline,
+  // never sent to the customer) with no documented REST route. Daniel's own wrapper
+  // (agendamento-api, same one that backs the schedule-send feature — see docs/whazing.md)
+  // exposes it as POST /nota, reusing the exact same Bearer token as the official API. This
+  // used to be a hardcoded no-op — an earlier version fell back to sendMessage, which leaked
+  // LLM-internal summaries (sometimes patient health details) straight to the customer's
+  // WhatsApp thread, so the note was dropped rather than sent anywhere until this existed.
+  // Best-effort: a failed post here must never break the turn — see sendPrivateNote below.
+  async sendPrivateNote(ticketId: number, text: string): Promise<unknown> {
+    try {
+      const res = await this.fetchImpl(`${NOTE_API_BASE}/nota`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.config.apiKey}`,
+          "content-type": "application/json",
+          accept: "application/json",
+        },
+        body: JSON.stringify({ ticketId, note: text }),
+        redirect: "error",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        throw new WhazingApiError(res.status, `POST ${NOTE_API_BASE}/nota`);
+      }
+      return await res.json();
+    } catch (e) {
+      logger.warn(
+        { ticketId, error: e },
+        "whazing: sendPrivateNote (wrapper /nota) failed (non-fatal)",
+      );
+      return null;
+    }
   }
 
   async sendAudioMessage(
