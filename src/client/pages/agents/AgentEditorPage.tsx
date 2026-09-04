@@ -250,7 +250,8 @@ function serializeWhazingIntake(
   const escalateQueueId = parseInt(w.escalateQueueId, 10);
   const campaignTagId = parseInt(w.campaignTagId, 10);
   return {
-    enabled: w.enabled,
+    historyRoutingEnabled: w.historyRoutingEnabled,
+    campaignEnabled: w.campaignEnabled,
     escalateQueueId: Number.isNaN(escalateQueueId) ? null : escalateQueueId,
     campaignTagId: Number.isNaN(campaignTagId) ? null : campaignTagId,
     campaignNotifyPhone: w.campaignNotifyPhone.trim() || null,
@@ -322,7 +323,8 @@ function readBehaviorState(a: Agent) {
   // reader the runtime uses, so the form always reflects clamped/defaulted values.
   const wi = readWhazingIntakeConfig(s);
   const whazingIntake: import("./types").WhazingIntakeUiState = {
-    enabled: wi.enabled,
+    historyRoutingEnabled: wi.historyRoutingEnabled,
+    campaignEnabled: wi.campaignEnabled,
     escalateQueueId:
       wi.escalateQueueId != null ? String(wi.escalateQueueId) : "",
     campaignTagId: wi.campaignTagId != null ? String(wi.campaignTagId) : "",
@@ -745,7 +747,8 @@ export function AgentEditorPage() {
   // Whazing intake routing (queue-by-history + campaign tag/notify), Tools-tab config like kanban.
   // Persisted in agent.settings.whazingIntake; synced only by syncToolConfig.
   const [whazingIntake, setWhazingIntake] = useState<WhazingIntakeUiState>({
-    enabled: false,
+    historyRoutingEnabled: false,
+    campaignEnabled: false,
     escalateQueueId: "",
     campaignTagId: "",
     campaignNotifyPhone: "",

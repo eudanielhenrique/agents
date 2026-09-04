@@ -1579,31 +1579,31 @@ export function ToolGrantsEditor({
 
       <div>
         <h3 className="mb-2 font-medium text-sm text-text-primary">
-          {t("editor.whazingIntakeTitle", "Whazing intake routing")}
+          {t("editor.whazingHistoryRoutingTitle", "Whazing history routing")}
         </h3>
         <p className="mb-3 text-text-muted text-xs">
           {t(
-            "editor.whazingIntakeSectionHint",
-            "Whazing-only. Routes a brand new ticket by the contact's history and tags/notifies a campaign-sourced lead. Off by default.",
+            "editor.whazingHistoryRoutingSectionHint",
+            "Whazing-only. Routes a brand new ticket to a human queue when the contact already has an ongoing conversation or was already answered. Independent of campaign tagging below — some clients want this, some don't. Off by default.",
           )}
         </p>
         <ConfigurableToolCard
-          selected={whazingIntake.enabled}
+          selected={whazingIntake.historyRoutingEnabled}
           onToggle={() =>
             setWhazingIntake({
               ...whazingIntake,
-              enabled: !whazingIntake.enabled,
+              historyRoutingEnabled: !whazingIntake.historyRoutingEnabled,
             })
           }
-          title={t("editor.whazingIntakeTitle", "Whazing intake routing")}
-          description={t(
-            "editor.whazingIntakeDescription",
-            "Move a new ticket to the right queue by history; tag + notify campaign leads.",
+          title={t(
+            "editor.whazingHistoryRoutingTitle",
+            "Whazing history routing",
           )}
-          configured={
-            whazingIntake.escalateQueueId !== "" ||
-            whazingIntake.campaignTagId !== ""
-          }
+          description={t(
+            "editor.whazingHistoryRoutingDescription",
+            "Move a new ticket to the escalate queue when the contact has prior history or was already answered.",
+          )}
+          configured={whazingIntake.escalateQueueId !== ""}
         >
           <FormField
             label={t("editor.whazingEscalateQueueId", "Escalate queue ID")}
@@ -1627,6 +1627,34 @@ export function ToolGrantsEditor({
               className="w-full rounded-lg border border-border bg-bg-secondary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50"
             />
           </FormField>
+        </ConfigurableToolCard>
+      </div>
+
+      <div>
+        <h3 className="mb-2 font-medium text-sm text-text-primary">
+          {t("editor.whazingCampaignTitle", "Whazing campaign tagging")}
+        </h3>
+        <p className="mb-3 text-text-muted text-xs">
+          {t(
+            "editor.whazingCampaignSectionHint",
+            "Whazing-only. Tags and notifies a campaign-sourced lead (Meta/Instagram click-to-WhatsApp ads). Independent of history routing above — most clients running ads want this on. Off by default.",
+          )}
+        </p>
+        <ConfigurableToolCard
+          selected={whazingIntake.campaignEnabled}
+          onToggle={() =>
+            setWhazingIntake({
+              ...whazingIntake,
+              campaignEnabled: !whazingIntake.campaignEnabled,
+            })
+          }
+          title={t("editor.whazingCampaignTitle", "Whazing campaign tagging")}
+          description={t(
+            "editor.whazingCampaignDescription",
+            "Tag + notify a campaign-sourced lead.",
+          )}
+          configured={whazingIntake.campaignTagId !== ""}
+        >
           <FormField
             label={t("editor.whazingCampaignTagId", "Campaign lead tag ID")}
             description={t(

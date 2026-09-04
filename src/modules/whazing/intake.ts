@@ -30,8 +30,9 @@ interface IntakeInbox {
   intake: WhazingIntakeConfig;
 }
 
-// Finds the (assumed single) agent with whazingIntake.enabled for this instance. More than one is
-// a config mistake, not a crash — first one wins, logged.
+// Finds the (assumed single) agent with historyRoutingEnabled or campaignEnabled for this instance
+// — either flag qualifies, since they run independently below. More than one candidate is a config
+// mistake, not a crash — first one wins, logged.
 async function findIntakeInbox(
   base: PrismaClient,
   tenantId: bigint,
@@ -48,10 +49,10 @@ async function findIntakeInbox(
       botQueueId: r.whazingQueueId,
       intake: readWhazingIntakeConfig(r.agent?.settings),
     }))
-    .filter((r) => r.intake.enabled);
+    .filter((r) => r.intake.historyRoutingEnabled || r.intake.campaignEnabled);
   if (candidates.length > 1) {
     logger.warn(
-      "whazing intake: more than one agent has whazingIntake.enabled for instance=%s tenant=%s — using the first",
+      "whazing intake: more than one agent has whazingIntake routing/campaign enabled for instance=%s tenant=%s — using the first",
       String(instanceId),
       String(tenantId),
     );
@@ -135,50 +136,59 @@ export async function runWhazingIntake(
   // know whether a human already owns this ticket, so the safe default is to let the bot sit this
   // turn out (not to answer as if it were a confirmed-fresh ticket). isKnownTicket stays false
   // (no WhazingConversation row gets created on "skipped"), so the next message retries this check.
-  let routing: WhazingIntakeRouting = { routedTo: "skipped" };
+  // When history routing is off, there is nothing to fail closed ON — default straight to "bot" so
+  // a client with only campaignEnabled never gets stuck re-skipping its own first message forever.
+  let routing: WhazingIntakeRouting = inbox.intake.historyRoutingEnabled
+    ? { routedTo: "skipped" }
+    : { routedTo: "bot", botQueueId };
 
-  const phone = event.contact?.phone;
-  if (phone) {
-    try {
-      const history = await client.listTicketsByPhone(phone);
-      const hasPriorHistory = hasActivePriorHistory(ticketId, history);
-      const currentFromHistory = history.find((t) => t.id === ticketId);
-      const alreadyAnswered =
-        currentFromHistory?.answered === true ||
-        ticketHasHumanReply(await client.getTicket(ticketId));
+  if (inbox.intake.historyRoutingEnabled) {
+    const phone = event.contact?.phone;
+    if (phone) {
+      try {
+        const history = await client.listTicketsByPhone(phone);
+        const hasPriorHistory = hasActivePriorHistory(ticketId, history);
+        const currentFromHistory = history.find((t) => t.id === ticketId);
+        const alreadyAnswered =
+          currentFromHistory?.answered === true ||
+          ticketHasHumanReply(await client.getTicket(ticketId));
 
-      if (hasPriorHistory || alreadyAnswered) {
-        routing = { routedTo: "escalate" };
-        if (inbox.intake.escalateQueueId != null) {
-          await client.assignTicketToQueue(
+        if (hasPriorHistory || alreadyAnswered) {
+          routing = { routedTo: "escalate" };
+          if (inbox.intake.escalateQueueId != null) {
+            await client.assignTicketToQueue(
+              ticketId,
+              inbox.intake.escalateQueueId,
+            );
+          }
+        } else {
+          routing = { routedTo: "bot", botQueueId };
+          if (botQueueId != null) {
+            await client.assignTicketToQueue(ticketId, botQueueId);
+          }
+        }
+      } catch (e) {
+        logger.warn(
+          {
             ticketId,
-            inbox.intake.escalateQueueId,
-          );
-        }
-      } else {
-        routing = { routedTo: "bot", botQueueId };
-        if (botQueueId != null) {
-          await client.assignTicketToQueue(ticketId, botQueueId);
-        }
+            error:
+              e instanceof Error ? { message: e.message, name: e.name } : e,
+          },
+          "whazing intake: routing check failed — skipping this turn (fail closed)",
+        );
+        routing = { routedTo: "skipped" };
       }
-    } catch (e) {
+    } else {
+      // No phone on the event — cannot run the history check either; same fail-closed default.
       logger.warn(
-        {
-          ticketId,
-          error: e instanceof Error ? { message: e.message, name: e.name } : e,
-        },
-        "whazing intake: routing check failed — skipping this turn (fail closed)",
+        { ticketId },
+        "whazing intake: no contact phone on event — skipping this turn",
       );
+      routing = { routedTo: "skipped" };
     }
-  } else {
-    // No phone on the event — cannot run the history check either; same fail-closed default.
-    logger.warn(
-      { ticketId },
-      "whazing intake: no contact phone on event — skipping this turn",
-    );
   }
 
-  if (event.campaignSignal) {
+  if (inbox.intake.campaignEnabled && event.campaignSignal) {
     const contactId = event.contact?.id;
     if (inbox.intake.campaignTagId != null && contactId != null) {
       try {

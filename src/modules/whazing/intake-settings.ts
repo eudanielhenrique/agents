@@ -5,7 +5,13 @@
 // single source of defaults + clamping for the `agent.settings.whazingIntake` block.
 
 export interface WhazingIntakeConfig {
-  enabled: boolean;
+  // Reroutes a brand-new ticket to escalateQueueId by prior history / already-answered. Independent
+  // of campaignEnabled — some clients want history-based routing, some don't, and both are common
+  // wanting ONLY campaign tagging (see campaignEnabled).
+  historyRoutingEnabled: boolean;
+  // Tags + notifies a campaign-sourced lead (ctwa_ad signal). Independent of historyRoutingEnabled —
+  // most clients running ads want this ON even when they don't want history-based rerouting.
+  campaignEnabled: boolean;
   // Queue to move a ticket to when the contact has prior history OR this ticket was already answered
   // by a human — also the target when a manual human takeover is detected (see webhook.ts).
   escalateQueueId: number | null;
@@ -19,7 +25,8 @@ export interface WhazingIntakeConfig {
 
 export const WHAZING_INTAKE_DEFAULTS: WhazingIntakeConfig = {
   // Opt-in: reshapes ticket queue placement, so it stays off until explicitly enabled.
-  enabled: false,
+  historyRoutingEnabled: false,
+  campaignEnabled: false,
   escalateQueueId: null,
   campaignTagId: null,
   campaignNotifyPhone: null,
@@ -55,8 +62,13 @@ export function readWhazingIntakeConfig(
   if (!s || typeof s !== "object") return { ...WHAZING_INTAKE_DEFAULTS };
   const bag = s as Record<string, unknown>;
   const D = WHAZING_INTAKE_DEFAULTS;
+  // Backward compat: a config saved before the split only has `enabled` — inherit it into BOTH new
+  // flags so an already-working tenant (history routing + campaign tagging together) keeps working
+  // exactly as before until the operator explicitly separates them in the editor.
+  const legacyEnabled = bool(bag.enabled, false);
   return {
-    enabled: bool(bag.enabled, D.enabled),
+    historyRoutingEnabled: bool(bag.historyRoutingEnabled, legacyEnabled),
+    campaignEnabled: bool(bag.campaignEnabled, legacyEnabled),
     escalateQueueId: idRef(bag.escalateQueueId),
     campaignTagId: idRef(bag.campaignTagId),
     campaignNotifyPhone: phoneRef(bag.campaignNotifyPhone),

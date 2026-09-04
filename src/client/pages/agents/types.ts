@@ -67,7 +67,10 @@ export interface HandoffUiState {
 // parsed on save. Persisted in agent.settings.whazingIntake — see
 // src/modules/whazing/intake-settings.ts.
 export interface WhazingIntakeUiState {
-  enabled: boolean;
+  // Independent toggles — a client can want campaign tagging without history-based rerouting, or
+  // vice versa. See src/modules/whazing/intake-settings.ts for the backward-compat reader.
+  historyRoutingEnabled: boolean;
+  campaignEnabled: boolean;
   escalateQueueId: string;
   campaignTagId: string;
   campaignNotifyPhone: string;
