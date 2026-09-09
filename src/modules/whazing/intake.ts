@@ -23,24 +23,46 @@ function sysCtx(tenantId: bigint): TenantContext {
   return { tenantId, userId: null, role: "TENANT_ADMIN" };
 }
 
-interface IntakeInbox {
-  // The bot's own queue for this instance (WhazingInbox.whazingQueueId) — where a ticket with no
-  // history and not yet answered stays. String per schema; null = catch-all inbox (no queue move).
+export interface IntakeResolution {
+  // The bot's own queue for this instance — where a ticket with no history and not yet answered stays.
+  // String per schema; null = catch-all inbox (no queue move).
   botQueueId: string | null;
   intake: WhazingIntakeConfig;
 }
 
-// Finds the (assumed single) agent with historyRoutingEnabled or campaignEnabled for this instance
-// — either flag qualifies, since they run independently below. More than one candidate is a config
-// mistake, not a crash — first one wins, logged.
-async function findIntakeInbox(
+// Resolves the Whazing intake routing & campaign config for this instance.
+// Primary source: WhazingInstance.settings (decoupled from individual agents).
+// Fallback: legacy agent.settings.whazingIntake on a bound inbox, ONLY IF the agent is currently enabled.
+export async function resolveWhazingIntake(
   base: PrismaClient,
   tenantId: bigint,
   instanceId: bigint,
-): Promise<IntakeInbox | null> {
+): Promise<IntakeResolution | null> {
+  // 1. Check instance-level settings first.
+  const instance = await runScopedOn(base, sysCtx(tenantId), (db) =>
+    db.whazingInstance.findUnique({
+      where: { id: instanceId },
+      select: { settings: true },
+    }),
+  );
+  if (instance?.settings) {
+    const intake = readWhazingIntakeConfig(instance.settings);
+    if (intake.historyRoutingEnabled || intake.campaignEnabled) {
+      const botQueueId =
+        intake.botQueueId != null ? String(intake.botQueueId) : null;
+      return { botQueueId, intake };
+    }
+  }
+
+  // 2. Fallback to legacy agent-bound inboxes (only enabled agents).
   const rows = await runScopedOn(base, sysCtx(tenantId), (db) =>
     db.whazingInbox.findMany({
-      where: { tenantId, instanceId, agentId: { not: null } },
+      where: {
+        tenantId,
+        instanceId,
+        agentId: { not: null },
+        agent: { enabled: true },
+      },
       select: { whazingQueueId: true, agent: { select: { settings: true } } },
     }),
   );
@@ -52,7 +74,7 @@ async function findIntakeInbox(
     .filter((r) => r.intake.historyRoutingEnabled || r.intake.campaignEnabled);
   if (candidates.length > 1) {
     logger.warn(
-      "whazing intake: more than one agent has whazingIntake routing/campaign enabled for instance=%s tenant=%s — using the first",
+      "whazing intake: more than one enabled agent has whazingIntake routing/campaign enabled for instance=%s tenant=%s — using the first",
       String(instanceId),
       String(tenantId),
     );
@@ -97,8 +119,8 @@ export async function resolveEscalateQueueId(
   tenantId: bigint,
   instanceId: bigint,
 ): Promise<number | null> {
-  const inbox = await findIntakeInbox(base, tenantId, instanceId);
-  return inbox?.intake.escalateQueueId ?? null;
+  const resolved = await resolveWhazingIntake(base, tenantId, instanceId);
+  return resolved?.intake.escalateQueueId ?? null;
 }
 
 export interface RunWhazingIntakeParams {
@@ -127,22 +149,27 @@ export async function runWhazingIntake(
   const ticketId = event.ticketId;
   if (ticketId == null) return { routedTo: "skipped" };
 
-  const inbox = await findIntakeInbox(base, tenantId, instanceId);
-  if (!inbox) return { routedTo: "skipped" };
+  const resolved = await resolveWhazingIntake(base, tenantId, instanceId);
+  if (!resolved) return { routedTo: "skipped" };
 
   const client = await loadWhazingClient(tenantId, instanceId, base);
-  const botQueueId = inbox.botQueueId != null ? Number(inbox.botQueueId) : null;
+  const botQueueId =
+    resolved.intake.botQueueId != null
+      ? resolved.intake.botQueueId
+      : resolved.botQueueId != null
+        ? Number(resolved.botQueueId)
+        : null;
   // Fail CLOSED, not open: if the history/already-answered check cannot be completed, we do not
   // know whether a human already owns this ticket, so the safe default is to let the bot sit this
   // turn out (not to answer as if it were a confirmed-fresh ticket). isKnownTicket stays false
   // (no WhazingConversation row gets created on "skipped"), so the next message retries this check.
   // When history routing is off, there is nothing to fail closed ON — default straight to "bot" so
   // a client with only campaignEnabled never gets stuck re-skipping its own first message forever.
-  let routing: WhazingIntakeRouting = inbox.intake.historyRoutingEnabled
+  let routing: WhazingIntakeRouting = resolved.intake.historyRoutingEnabled
     ? { routedTo: "skipped" }
     : { routedTo: "bot", botQueueId };
 
-  if (inbox.intake.historyRoutingEnabled) {
+  if (resolved.intake.historyRoutingEnabled) {
     const phone = event.contact?.phone;
     if (phone) {
       try {
@@ -155,10 +182,10 @@ export async function runWhazingIntake(
 
         if (hasPriorHistory || alreadyAnswered) {
           routing = { routedTo: "escalate" };
-          if (inbox.intake.escalateQueueId != null) {
+          if (resolved.intake.escalateQueueId != null) {
             await client.assignTicketToQueue(
               ticketId,
-              inbox.intake.escalateQueueId,
+              resolved.intake.escalateQueueId,
             );
           }
         } else {
@@ -188,12 +215,12 @@ export async function runWhazingIntake(
     }
   }
 
-  if (inbox.intake.campaignEnabled && event.campaignSignal) {
+  if (resolved.intake.campaignEnabled && event.campaignSignal) {
     const contactId = event.contact?.id;
-    if (inbox.intake.campaignTagId != null && contactId != null) {
+    if (resolved.intake.campaignTagId != null && contactId != null) {
       try {
         await client.setContactTags(contactId, [
-          String(inbox.intake.campaignTagId),
+          String(resolved.intake.campaignTagId),
         ]);
       } catch (e) {
         logger.warn(
@@ -202,14 +229,14 @@ export async function runWhazingIntake(
         );
       }
     }
-    if (inbox.intake.campaignNotifyPhone) {
+    if (resolved.intake.campaignNotifyPhone) {
       try {
-        const text = inbox.intake.campaignNotifyMessage.replace(
+        const text = resolved.intake.campaignNotifyMessage.replace(
           "{{ctwaClid}}",
           event.campaignSignal.ctwaClid ?? "",
         );
         await client.sendMessageToNumber(
-          inbox.intake.campaignNotifyPhone,
+          resolved.intake.campaignNotifyPhone,
           text,
         );
       } catch (e) {

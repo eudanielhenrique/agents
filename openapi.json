@@ -29482,6 +29482,13 @@
                     "minLength": 1,
                     "description": "Whazing API key; encrypted at rest, never returned.",
                     "type": "string"
+                  },
+                  "settings": {
+                    "description": "Instance settings bag (intake routing, campaigns, etc.).",
+                    "type": "object",
+                    "patternProperties": {
+                      "^(.*)$": {}
+                    }
                   }
                 },
                 "required": [
@@ -29509,6 +29516,13 @@
                     "minLength": 1,
                     "description": "Whazing API key; encrypted at rest, never returned.",
                     "type": "string"
+                  },
+                  "settings": {
+                    "description": "Instance settings bag (intake routing, campaigns, etc.).",
+                    "type": "object",
+                    "patternProperties": {
+                      "^(.*)$": {}
+                    }
                   }
                 },
                 "required": [
@@ -29536,6 +29550,13 @@
                     "minLength": 1,
                     "description": "Whazing API key; encrypted at rest, never returned.",
                     "type": "string"
+                  },
+                  "settings": {
+                    "description": "Instance settings bag (intake routing, campaigns, etc.).",
+                    "type": "object",
+                    "patternProperties": {
+                      "^(.*)$": {}
+                    }
                   }
                 },
                 "required": [
@@ -29736,7 +29757,7 @@
           "Channels"
         ],
         "summary": "Update Whazing instance",
-        "description": "Update the name, baseUrl, or apiKey of a Whazing instance.",
+        "description": "Update the name, baseUrl, apiKey, or settings of a Whazing instance.",
         "parameters": [
           {
             "name": "id",
@@ -29780,6 +29801,13 @@
                     "minLength": 1,
                     "description": "New API key; re-encrypted at rest, never returned.",
                     "type": "string"
+                  },
+                  "settings": {
+                    "description": "Instance settings bag (intake routing, campaigns, etc.).",
+                    "type": "object",
+                    "patternProperties": {
+                      "^(.*)$": {}
+                    }
                   }
                 }
               }
@@ -29802,6 +29830,13 @@
                     "minLength": 1,
                     "description": "New API key; re-encrypted at rest, never returned.",
                     "type": "string"
+                  },
+                  "settings": {
+                    "description": "Instance settings bag (intake routing, campaigns, etc.).",
+                    "type": "object",
+                    "patternProperties": {
+                      "^(.*)$": {}
+                    }
                   }
                 }
               }
@@ -29824,6 +29859,13 @@
                     "minLength": 1,
                     "description": "New API key; re-encrypted at rest, never returned.",
                     "type": "string"
+                  },
+                  "settings": {
+                    "description": "Instance settings bag (intake routing, campaigns, etc.).",
+                    "type": "object",
+                    "patternProperties": {
+                      "^(.*)$": {}
+                    }
                   }
                 }
               }

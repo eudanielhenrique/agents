@@ -9,6 +9,7 @@ import {
   PlugZap,
   Plus,
   RadioTower,
+  SlidersHorizontal,
   Trash2,
   Unplug,
 } from "lucide-react";
@@ -25,6 +26,9 @@ import {
   Modal,
   PageContainer,
   Skeleton,
+  Switch,
+  Tabs,
+  Textarea,
   Tooltip,
   useModalController,
   useToast,
@@ -235,9 +239,19 @@ export function WhazingPage() {
   const [creating, setCreating] = useState(false);
 
   // Edit form
+  const [editTab, setEditTab] = useState<"general" | "intake">("general");
   const [editName, setEditName] = useState("");
   const [editBaseUrl, setEditBaseUrl] = useState("");
   const [editApiKey, setEditApiKey] = useState("");
+  const [editHistoryRoutingEnabled, setEditHistoryRoutingEnabled] =
+    useState(false);
+  const [editEscalateQueueId, setEditEscalateQueueId] = useState("");
+  const [editBotQueueId, setEditBotQueueId] = useState("");
+  const [editCampaignEnabled, setEditCampaignEnabled] = useState(false);
+  const [editCampaignTagId, setEditCampaignTagId] = useState("");
+  const [editCampaignNotifyPhone, setEditCampaignNotifyPhone] = useState("");
+  const [editCampaignNotifyMessage, setEditCampaignNotifyMessage] =
+    useState("");
   const [saving, setSaving] = useState(false);
 
   // Inbox form
@@ -321,10 +335,47 @@ export function WhazingPage() {
 
   // ── Edit instance ─────────────────────────────────────────────────────────
 
-  function openEdit(inst: WhazingInstance) {
+  function openEdit(
+    inst: WhazingInstance,
+    tab: "general" | "intake" = "general",
+  ) {
+    setEditTab(tab);
     setEditName(inst.name);
     setEditBaseUrl(inst.baseUrl);
     setEditApiKey("");
+
+    const s =
+      typeof inst.settings === "object" && inst.settings !== null
+        ? (inst.settings as Record<string, unknown>)
+        : {};
+    const intake =
+      typeof s.intake === "object" && s.intake !== null
+        ? (s.intake as Record<string, unknown>)
+        : typeof s.whazingIntake === "object" && s.whazingIntake !== null
+          ? (s.whazingIntake as Record<string, unknown>)
+          : s;
+
+    setEditHistoryRoutingEnabled(Boolean(intake.historyRoutingEnabled));
+    setEditEscalateQueueId(
+      intake.escalateQueueId != null ? String(intake.escalateQueueId) : "",
+    );
+    setEditBotQueueId(
+      intake.botQueueId != null ? String(intake.botQueueId) : "",
+    );
+    setEditCampaignEnabled(Boolean(intake.campaignEnabled));
+    setEditCampaignTagId(
+      intake.campaignTagId != null ? String(intake.campaignTagId) : "",
+    );
+    setEditCampaignNotifyPhone(
+      typeof intake.campaignNotifyPhone === "string"
+        ? intake.campaignNotifyPhone
+        : "",
+    );
+    setEditCampaignNotifyMessage(
+      typeof intake.campaignNotifyMessage === "string"
+        ? intake.campaignNotifyMessage
+        : "Lead de campanha identificado.\n\nctwaClid: {{ctwaClid}}",
+    );
     editModal.open(inst);
   }
 
@@ -333,7 +384,39 @@ export function WhazingPage() {
     if (!inst) return;
     setSaving(true);
     try {
-      const body: { name?: string; baseUrl?: string; apiKey?: string } = {};
+      const origSettings =
+        typeof inst.settings === "object" && inst.settings !== null
+          ? (inst.settings as Record<string, unknown>)
+          : {};
+
+      const nextIntake = {
+        historyRoutingEnabled: editHistoryRoutingEnabled,
+        escalateQueueId: editEscalateQueueId.trim()
+          ? Number(editEscalateQueueId.trim())
+          : null,
+        botQueueId: editBotQueueId.trim()
+          ? Number(editBotQueueId.trim())
+          : null,
+        campaignEnabled: editCampaignEnabled,
+        campaignTagId: editCampaignTagId.trim()
+          ? Number(editCampaignTagId.trim())
+          : null,
+        campaignNotifyPhone: editCampaignNotifyPhone.trim(),
+        campaignNotifyMessage: editCampaignNotifyMessage,
+      };
+
+      const body: {
+        name?: string;
+        baseUrl?: string;
+        apiKey?: string;
+        settings?: Record<string, unknown>;
+      } = {
+        settings: {
+          ...origSettings,
+          intake: nextIntake,
+        },
+      };
+
       if (editName.trim() !== inst.name) body.name = editName.trim();
       if (editBaseUrl.trim() !== inst.baseUrl)
         body.baseUrl = editBaseUrl.trim();
@@ -514,10 +597,44 @@ export function WhazingPage() {
     createApiKey.trim() !== "";
 
   const editPayload = editModal.payload;
+  const origSettings =
+    typeof editPayload?.settings === "object" && editPayload?.settings !== null
+      ? (editPayload.settings as Record<string, unknown>)
+      : {};
+  const origIntake =
+    typeof origSettings.intake === "object" && origSettings.intake !== null
+      ? (origSettings.intake as Record<string, unknown>)
+      : typeof origSettings.whazingIntake === "object" &&
+          origSettings.whazingIntake !== null
+        ? (origSettings.whazingIntake as Record<string, unknown>)
+        : origSettings;
+
+  const origMsg =
+    typeof origIntake.campaignNotifyMessage === "string"
+      ? origIntake.campaignNotifyMessage
+      : "Lead de campanha identificado.\n\nctwaClid: {{ctwaClid}}";
+
   const editDirty =
     editName !== (editPayload?.name ?? "") ||
     editBaseUrl !== (editPayload?.baseUrl ?? "") ||
-    editApiKey.trim() !== "";
+    editApiKey.trim() !== "" ||
+    editHistoryRoutingEnabled !== Boolean(origIntake.historyRoutingEnabled) ||
+    editEscalateQueueId !==
+      (origIntake.escalateQueueId != null
+        ? String(origIntake.escalateQueueId)
+        : "") ||
+    editBotQueueId !==
+      (origIntake.botQueueId != null ? String(origIntake.botQueueId) : "") ||
+    editCampaignEnabled !== Boolean(origIntake.campaignEnabled) ||
+    editCampaignTagId !==
+      (origIntake.campaignTagId != null
+        ? String(origIntake.campaignTagId)
+        : "") ||
+    editCampaignNotifyPhone !==
+      (typeof origIntake.campaignNotifyPhone === "string"
+        ? origIntake.campaignNotifyPhone
+        : "") ||
+    editCampaignNotifyMessage !== origMsg;
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -575,91 +692,162 @@ export function WhazingPage() {
               return (
                 <Card key={inst.id} className="overflow-hidden p-0">
                   {/* Instance header */}
-                  <div className="flex flex-wrap items-center justify-between gap-3 border-border border-b bg-bg-tertiary/40 px-4 py-3">
-                    <div className="flex min-w-0 flex-col gap-0.5">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-text-primary">
-                          {inst.name}
-                        </span>
-                        {disconnected && (
-                          <Badge variant="warning">
-                            {t("whazing.disconnectedBadge", "Disconnected")}
-                          </Badge>
-                        )}
+                  {(() => {
+                    const s =
+                      typeof inst.settings === "object" &&
+                      inst.settings !== null
+                        ? (inst.settings as Record<string, unknown>)
+                        : {};
+                    const intake =
+                      typeof s.intake === "object" && s.intake !== null
+                        ? (s.intake as Record<string, unknown>)
+                        : typeof s.whazingIntake === "object" &&
+                            s.whazingIntake !== null
+                          ? (s.whazingIntake as Record<string, unknown>)
+                          : s;
+                    return (
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-border border-b bg-bg-tertiary/40 px-4 py-3">
+                        <div className="flex min-w-0 flex-col gap-0.5">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium text-text-primary">
+                              {inst.name}
+                            </span>
+                            {disconnected && (
+                              <Badge variant="warning">
+                                {t("whazing.disconnectedBadge", "Disconnected")}
+                              </Badge>
+                            )}
+                            {Boolean(intake.historyRoutingEnabled) && (
+                              <Badge variant="info">
+                                {t(
+                                  "whazing.historyRoutingBadge",
+                                  "Triagem (Fila {{queue}})",
+                                  {
+                                    queue: intake.escalateQueueId ?? "?",
+                                  },
+                                )}
+                              </Badge>
+                            )}
+                            {Boolean(intake.campaignEnabled) && (
+                              <Badge variant="primary">
+                                {t(
+                                  "whazing.campaignBadge",
+                                  "Meta Ads (Tag {{tag}})",
+                                  {
+                                    tag: intake.campaignTagId ?? "?",
+                                  },
+                                )}
+                              </Badge>
+                            )}
+                          </div>
+                          <a
+                            href={inst.baseUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 text-text-muted text-xs transition-colors hover:text-text-primary"
+                          >
+                            {inst.baseUrl}
+                            <ExternalLink
+                              className="h-3 w-3"
+                              aria-hidden="true"
+                            />
+                          </a>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => openAddInbox(inst.id)}
+                            disabled={disconnected}
+                          >
+                            <Plus className="h-4 w-4" aria-hidden="true" />
+                            {t("whazing.addQueue", "Add queue")}
+                          </Button>
+                          <Tooltip
+                            content={t(
+                              "whazing.configureIntake",
+                              "Triagem e campanhas (Meta Ads)",
+                            )}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => openEdit(inst, "intake")}
+                              aria-label={t(
+                                "whazing.configureIntake",
+                                "Triagem e campanhas (Meta Ads)",
+                              )}
+                              className="inline-flex shrink-0 items-center justify-center rounded p-1.5 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary"
+                            >
+                              <SlidersHorizontal
+                                className="h-4 w-4"
+                                aria-hidden="true"
+                              />
+                            </button>
+                          </Tooltip>
+                          <Tooltip
+                            content={t("whazing.editInstance", "Edit instance")}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => openEdit(inst, "general")}
+                              aria-label={t(
+                                "whazing.editInstance",
+                                "Edit instance",
+                              )}
+                              className="inline-flex shrink-0 items-center justify-center rounded p-1.5 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary"
+                            >
+                              <Pencil className="h-4 w-4" aria-hidden="true" />
+                            </button>
+                          </Tooltip>
+                          {disconnected ? (
+                            <Tooltip
+                              content={t(
+                                "whazing.reconnect",
+                                "Reconnect instance",
+                              )}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => void reconnect(inst)}
+                                aria-label={t(
+                                  "whazing.reconnect",
+                                  "Reconnect instance",
+                                )}
+                                className="inline-flex shrink-0 items-center justify-center rounded p-1.5 text-text-muted transition-colors hover:bg-success/10 hover:text-success"
+                              >
+                                <PlugZap
+                                  className="h-4 w-4"
+                                  aria-hidden="true"
+                                />
+                              </button>
+                            </Tooltip>
+                          ) : (
+                            <Tooltip
+                              content={t(
+                                "whazing.disconnect",
+                                "Disconnect instance",
+                              )}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => void disconnect(inst)}
+                                aria-label={t(
+                                  "whazing.disconnect",
+                                  "Disconnect instance",
+                                )}
+                                className="inline-flex shrink-0 items-center justify-center rounded p-1.5 text-text-muted transition-colors hover:bg-error/10 hover:text-error"
+                              >
+                                <Unplug
+                                  className="h-4 w-4"
+                                  aria-hidden="true"
+                                />
+                              </button>
+                            </Tooltip>
+                          )}
+                        </div>
                       </div>
-                      <a
-                        href={inst.baseUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-1 text-text-muted text-xs transition-colors hover:text-text-primary"
-                      >
-                        {inst.baseUrl}
-                        <ExternalLink className="h-3 w-3" aria-hidden="true" />
-                      </a>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => openAddInbox(inst.id)}
-                        disabled={disconnected}
-                      >
-                        <Plus className="h-4 w-4" aria-hidden="true" />
-                        {t("whazing.addQueue", "Add queue")}
-                      </Button>
-                      <Tooltip
-                        content={t("whazing.editInstance", "Edit instance")}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => openEdit(inst)}
-                          aria-label={t(
-                            "whazing.editInstance",
-                            "Edit instance",
-                          )}
-                          className="inline-flex shrink-0 items-center justify-center rounded p-1.5 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary"
-                        >
-                          <Pencil className="h-4 w-4" aria-hidden="true" />
-                        </button>
-                      </Tooltip>
-                      {disconnected ? (
-                        <Tooltip
-                          content={t("whazing.reconnect", "Reconnect instance")}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => void reconnect(inst)}
-                            aria-label={t(
-                              "whazing.reconnect",
-                              "Reconnect instance",
-                            )}
-                            className="inline-flex shrink-0 items-center justify-center rounded p-1.5 text-text-muted transition-colors hover:bg-success/10 hover:text-success"
-                          >
-                            <PlugZap className="h-4 w-4" aria-hidden="true" />
-                          </button>
-                        </Tooltip>
-                      ) : (
-                        <Tooltip
-                          content={t(
-                            "whazing.disconnect",
-                            "Disconnect instance",
-                          )}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => void disconnect(inst)}
-                            aria-label={t(
-                              "whazing.disconnect",
-                              "Disconnect instance",
-                            )}
-                            className="inline-flex shrink-0 items-center justify-center rounded p-1.5 text-text-muted transition-colors hover:bg-error/10 hover:text-error"
-                          >
-                            <Unplug className="h-4 w-4" aria-hidden="true" />
-                          </button>
-                        </Tooltip>
-                      )}
-                    </div>
-                  </div>
+                    );
+                  })()}
 
                   {/* Webhook URL */}
                   <div className="border-border border-b px-4 py-3">
@@ -859,6 +1047,7 @@ export function WhazingPage() {
         modal={editModal}
         unsavedChanges={editDirty}
         title={t("whazing.editTitle", "Edit instance")}
+        size="lg"
         footer={
           <div className="flex justify-end gap-2">
             <Button
@@ -881,41 +1070,227 @@ export function WhazingPage() {
         }
       >
         <div className="flex flex-col gap-4">
-          <FormField label={t("whazing.instanceName", "Name")} required>
-            <Input
-              value={editName}
-              onChange={(e) => setEditName(e.target.value)}
-            />
-          </FormField>
-          <FormField
-            label={t("whazing.baseUrl", "Base URL")}
-            required
-            error={
-              editUrlInvalid
-                ? t("common.invalidUrl", "Must be a valid http(s) URL.")
-                : null
-            }
-          >
-            <Input
-              value={editBaseUrl}
-              onChange={(e) => setEditBaseUrl(e.target.value)}
-            />
-          </FormField>
-          <FormField
-            label={t("whazing.apiKey", "API key")}
-            description={t(
-              "whazing.apiKeyEditHint",
-              "Leave blank to keep the current key.",
+          <Tabs
+            items={[
+              { key: "general", label: t("whazing.tabGeneral", "Conexão") },
+              {
+                key: "intake",
+                label: t("whazing.tabIntake", "Triagem & Meta Ads"),
+              },
+            ]}
+            value={editTab}
+            onChange={(k) => setEditTab(k as "general" | "intake")}
+            aria-label={t(
+              "whazing.editTabsAria",
+              "Abas de edição da instância",
             )}
-          >
-            <Input
-              type="password"
-              showPasswordToggle
-              value={editApiKey}
-              onChange={(e) => setEditApiKey(e.target.value)}
-              placeholder={t("whazing.apiKeyPlaceholder", "••••••••")}
-            />
-          </FormField>
+          />
+
+          {editTab === "general" && (
+            <div className="flex flex-col gap-4 pt-1">
+              <FormField label={t("whazing.instanceName", "Name")} required>
+                <Input
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                />
+              </FormField>
+              <FormField
+                label={t("whazing.baseUrl", "Base URL")}
+                required
+                error={
+                  editUrlInvalid
+                    ? t("common.invalidUrl", "Must be a valid http(s) URL.")
+                    : null
+                }
+              >
+                <Input
+                  value={editBaseUrl}
+                  onChange={(e) => setEditBaseUrl(e.target.value)}
+                />
+              </FormField>
+              <FormField
+                label={t("whazing.apiKey", "API key")}
+                description={t(
+                  "whazing.apiKeyEditHint",
+                  "Leave blank to keep the current key.",
+                )}
+              >
+                <Input
+                  type="password"
+                  showPasswordToggle
+                  value={editApiKey}
+                  onChange={(e) => setEditApiKey(e.target.value)}
+                  placeholder={t("whazing.apiKeyPlaceholder", "••••••••")}
+                />
+              </FormField>
+            </div>
+          )}
+
+          {editTab === "intake" && (
+            <div className="flex flex-col gap-5 pt-1">
+              {/* History Routing Section */}
+              <div className="flex flex-col gap-3 rounded-lg border border-border bg-bg-secondary/40 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h4 className="font-medium text-sm text-text-primary">
+                      {t(
+                        "whazing.intakeHistoryRoutingTitle",
+                        "Roteamento por histórico",
+                      )}
+                    </h4>
+                    <p className="mt-1 text-text-muted text-xs leading-relaxed">
+                      {t(
+                        "whazing.intakeHistoryRoutingHint",
+                        "Roteia um ticket novo para uma fila humana quando o contato já possui histórico ou já foi respondido.",
+                      )}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={editHistoryRoutingEnabled}
+                    onCheckedChange={setEditHistoryRoutingEnabled}
+                    aria-label={t(
+                      "whazing.intakeHistoryRoutingTitle",
+                      "Roteamento por histórico",
+                    )}
+                  />
+                </div>
+
+                {editHistoryRoutingEnabled && (
+                  <div className="grid grid-cols-1 gap-3 border-border/60 border-t pt-3 sm:grid-cols-2">
+                    <FormField
+                      label={t(
+                        "whazing.intakeEscalateQueueId",
+                        "ID da fila de escalonamento",
+                      )}
+                      description={t(
+                        "whazing.intakeEscalateQueueIdHint",
+                        "ID da fila do Whazing para onde o ticket vai quando o contato já tem histórico ou já foi respondido.",
+                      )}
+                    >
+                      <Input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={editEscalateQueueId}
+                        onChange={(e) => setEditEscalateQueueId(e.target.value)}
+                        placeholder="ex.: 15"
+                      />
+                    </FormField>
+                    <FormField
+                      label={t(
+                        "whazing.intakeBotQueueId",
+                        "Fila do Bot (Opcional)",
+                      )}
+                      description={t(
+                        "whazing.intakeBotQueueIdHint",
+                        "ID da fila para leads novos sem histórico atendidos pelo bot.",
+                      )}
+                    >
+                      <Input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={editBotQueueId}
+                        onChange={(e) => setEditBotQueueId(e.target.value)}
+                        placeholder="ex.: 14"
+                      />
+                    </FormField>
+                  </div>
+                )}
+              </div>
+
+              {/* Campaign Tagging Section */}
+              <div className="flex flex-col gap-3 rounded-lg border border-border bg-bg-secondary/40 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h4 className="font-medium text-sm text-text-primary">
+                      {t(
+                        "whazing.intakeCampaignTitle",
+                        "Campanhas Meta Ads (Click-to-WhatsApp)",
+                      )}
+                    </h4>
+                    <p className="mt-1 text-text-muted text-xs leading-relaxed">
+                      {t(
+                        "whazing.intakeCampaignHint",
+                        "Etiqueta e avisa a equipe interna sobre um lead vindo de anúncio clique-para-WhatsApp do Meta/Instagram.",
+                      )}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={editCampaignEnabled}
+                    onCheckedChange={setEditCampaignEnabled}
+                    aria-label={t(
+                      "whazing.intakeCampaignTitle",
+                      "Campanhas Meta Ads (Click-to-WhatsApp)",
+                    )}
+                  />
+                </div>
+
+                {editCampaignEnabled && (
+                  <div className="flex flex-col gap-3 border-border/60 border-t pt-3">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <FormField
+                        label={t(
+                          "whazing.intakeCampaignTagId",
+                          "ID da etiqueta de lead de campanha",
+                        )}
+                        description={t(
+                          "whazing.intakeCampaignTagIdHint",
+                          "ID da etiqueta do Whazing aplicada ao contato quando detectado sinal de anúncio.",
+                        )}
+                      >
+                        <Input
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={editCampaignTagId}
+                          onChange={(e) => setEditCampaignTagId(e.target.value)}
+                          placeholder="ex.: 31"
+                        />
+                      </FormField>
+                      <FormField
+                        label={t(
+                          "whazing.intakeCampaignNotifyPhone",
+                          "Telefone de aviso",
+                        )}
+                        description={t(
+                          "whazing.intakeCampaignNotifyPhoneHint",
+                          "Número interno avisado sobre um lead de campanha (com DDI e DDD).",
+                        )}
+                      >
+                        <Input
+                          type="text"
+                          value={editCampaignNotifyPhone}
+                          onChange={(e) =>
+                            setEditCampaignNotifyPhone(e.target.value)
+                          }
+                          placeholder="ex.: 5527999594959"
+                        />
+                      </FormField>
+                    </div>
+                    <FormField
+                      label={t(
+                        "whazing.intakeCampaignNotifyMessage",
+                        "Modelo da mensagem de aviso",
+                      )}
+                      description={t(
+                        "whazing.intakeCampaignNotifyMessageHint",
+                        "Enviada pro telefone de aviso. {{ctwaClid}} é substituído pelo ID do clique do anúncio.",
+                      )}
+                    >
+                      <Textarea
+                        value={editCampaignNotifyMessage}
+                        onChange={(e) =>
+                          setEditCampaignNotifyMessage(e.target.value)
+                        }
+                        rows={2}
+                      />
+                    </FormField>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
 

@@ -15,6 +15,8 @@ export interface WhazingIntakeConfig {
   // Queue to move a ticket to when the contact has prior history OR this ticket was already answered
   // by a human — also the target when a manual human takeover is detected (see webhook.ts).
   escalateQueueId: number | null;
+  // Target bot queue for fresh, unescalated tickets when history routing is on. Optional (null = use inbox queue).
+  botQueueId: number | null;
   // Whazing tag id applied to a contact whose message carries a campaign entry signal (ctwa_ad).
   campaignTagId: number | null;
   // Internal phone notified about a campaign lead. null = no notification sent.
@@ -28,6 +30,7 @@ export const WHAZING_INTAKE_DEFAULTS: WhazingIntakeConfig = {
   historyRoutingEnabled: false,
   campaignEnabled: false,
   escalateQueueId: null,
+  botQueueId: null,
   campaignTagId: null,
   campaignNotifyPhone: null,
   campaignNotifyMessage:
@@ -55,10 +58,20 @@ function phoneRef(v: unknown): string | null {
 export function readWhazingIntakeConfig(
   settings: unknown,
 ): WhazingIntakeConfig {
+  if (!settings || typeof settings !== "object") {
+    return { ...WHAZING_INTAKE_DEFAULTS };
+  }
+  const rec = settings as Record<string, unknown>;
   const s =
-    settings && typeof settings === "object"
-      ? (settings as Record<string, unknown>).whazingIntake
-      : undefined;
+    rec.whazingIntake && typeof rec.whazingIntake === "object"
+      ? rec.whazingIntake
+      : rec.intake && typeof rec.intake === "object"
+        ? rec.intake
+        : "historyRoutingEnabled" in rec ||
+            "campaignEnabled" in rec ||
+            "enabled" in rec
+          ? rec
+          : undefined;
   if (!s || typeof s !== "object") return { ...WHAZING_INTAKE_DEFAULTS };
   const bag = s as Record<string, unknown>;
   const D = WHAZING_INTAKE_DEFAULTS;
@@ -70,6 +83,7 @@ export function readWhazingIntakeConfig(
     historyRoutingEnabled: bool(bag.historyRoutingEnabled, legacyEnabled),
     campaignEnabled: bool(bag.campaignEnabled, legacyEnabled),
     escalateQueueId: idRef(bag.escalateQueueId),
+    botQueueId: idRef(bag.botQueueId),
     campaignTagId: idRef(bag.campaignTagId),
     campaignNotifyPhone: phoneRef(bag.campaignNotifyPhone),
     campaignNotifyMessage: str(

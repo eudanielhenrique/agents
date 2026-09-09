@@ -363,6 +363,7 @@ model WhazingInstance {
   routeToken     String    @map("route_token")
   routeTokenHash String    @unique @map("route_token_hash")
   disconnectedAt DateTime? @map("disconnected_at")
+  settings       Json      @default("{}")
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 

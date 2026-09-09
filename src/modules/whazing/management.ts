@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@/../generated/prisma/client";
+import type { Prisma, PrismaClient } from "@/../generated/prisma/client";
 import { decryptJson, encryptJson } from "@/api/lib/crypto";
 import basePrisma from "@/api/lib/prisma";
 import config from "@/config";
@@ -16,6 +16,7 @@ export interface WhazingInstanceDto {
   baseUrl: string;
   webhookUrl: string;
   disconnectedAt: string | null;
+  settings: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
@@ -38,6 +39,7 @@ function toInstanceDto(r: {
   baseUrl: string;
   routeToken: string;
   disconnectedAt: Date | null;
+  settings?: unknown;
   createdAt: Date;
   updatedAt: Date;
 }): WhazingInstanceDto {
@@ -49,6 +51,10 @@ function toInstanceDto(r: {
     baseUrl: r.baseUrl,
     webhookUrl: whazingWebhookUrl(config.publicUrl, plainToken),
     disconnectedAt: r.disconnectedAt?.toISOString() ?? null,
+    settings:
+      r.settings && typeof r.settings === "object"
+        ? (r.settings as Record<string, unknown>)
+        : {},
     createdAt: r.createdAt.toISOString(),
     updatedAt: r.updatedAt.toISOString(),
   };
@@ -82,6 +88,7 @@ const INSTANCE_SELECT = {
   baseUrl: true,
   routeToken: true,
   disconnectedAt: true,
+  settings: true,
   createdAt: true,
   updatedAt: true,
 } as const;
@@ -120,6 +127,7 @@ export interface CreateWhazingInstanceInput {
   name: string;
   baseUrl: string;
   apiKey: string;
+  settings?: Record<string, unknown>;
 }
 
 export async function createWhazingInstance(
@@ -140,6 +148,7 @@ export async function createWhazingInstance(
         apiKey: encryptJson(input.apiKey),
         routeToken: encryptJson(token),
         routeTokenHash: hash,
+        settings: (input.settings ?? {}) as Prisma.InputJsonValue,
       },
       select: INSTANCE_SELECT,
     }),
@@ -151,6 +160,7 @@ export interface UpdateWhazingInstanceInput {
   name?: string;
   baseUrl?: string;
   apiKey?: string;
+  settings?: Record<string, unknown>;
 }
 
 export async function updateWhazingInstance(
@@ -167,6 +177,8 @@ export async function updateWhazingInstance(
   if (input.baseUrl !== undefined)
     data.baseUrl = input.baseUrl.trim().replace(/\/+$/, "");
   if (input.apiKey !== undefined) data.apiKey = encryptJson(input.apiKey);
+  if (input.settings !== undefined)
+    data.settings = input.settings as Prisma.InputJsonValue;
 
   const row = await runScopedOn(db, ctx, (scoped) =>
     scoped.whazingInstance.update({

@@ -72,7 +72,12 @@ export const whazingController = new Elysia({
   .post(
     "/instances",
     async ({ tenantContext, body }) => {
-      const b = body as { name: string; baseUrl: string; apiKey: string };
+      const b = body as {
+        name: string;
+        baseUrl: string;
+        apiKey: string;
+        settings?: Record<string, unknown>;
+      };
       return {
         instance: instanceIdentity,
         whazingInstance: await createWhazingInstance(
@@ -81,6 +86,7 @@ export const whazingController = new Elysia({
             name: b.name,
             baseUrl: b.baseUrl,
             apiKey: b.apiKey,
+            settings: b.settings,
           },
         ),
       };
@@ -101,6 +107,12 @@ export const whazingController = new Elysia({
           minLength: 1,
           description: "Whazing API key; encrypted at rest, never returned.",
         }),
+        settings: t.Optional(
+          t.Record(t.String(), t.Unknown(), {
+            description:
+              "Instance settings bag (intake routing, campaigns, etc.).",
+          }),
+        ),
       }),
       detail: doc(
         "Create Whazing instance",
@@ -116,6 +128,7 @@ export const whazingController = new Elysia({
         name?: string;
         baseUrl?: string;
         apiKey?: string;
+        settings?: Record<string, unknown>;
       };
       return {
         instance: instanceIdentity,
@@ -146,10 +159,16 @@ export const whazingController = new Elysia({
             description: "New API key; re-encrypted at rest, never returned.",
           }),
         ),
+        settings: t.Optional(
+          t.Record(t.String(), t.Unknown(), {
+            description:
+              "Instance settings bag (intake routing, campaigns, etc.).",
+          }),
+        ),
       }),
       detail: doc(
         "Update Whazing instance",
-        "Update the name, baseUrl, or apiKey of a Whazing instance.",
+        "Update the name, baseUrl, apiKey, or settings of a Whazing instance.",
       ),
       response: errors(400, 401, 403, 404),
     },
