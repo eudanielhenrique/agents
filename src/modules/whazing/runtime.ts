@@ -180,9 +180,15 @@ export async function runWhazingAgentTurn(
   // name, not a WhatsApp handle/emoji (see contact-name.ts). A messy/absent name is left unset so
   // the agent's own prompt instructions decide whether to ask for it.
   const rawContactName = event.contact?.name ?? null;
-  const promptVars = looksLikePersonName(rawContactName)
-    ? { nome_contato: rawContactName as string }
-    : undefined;
+  const rawContactPhone = event.contact?.phone ?? null;
+  const promptVars: Record<string, string> = {};
+  if (looksLikePersonName(rawContactName)) {
+    promptVars.nome_contato = rawContactName as string;
+  }
+  if (rawContactPhone) {
+    promptVars.telefone_contato = rawContactPhone;
+  }
+  const hasPromptVars = Object.keys(promptVars).length > 0;
   const loaded = await runScopedOn(base, sysCtx(tenantId), (db) =>
     loadAgentConfig(
       db,
@@ -193,7 +199,7 @@ export async function runWhazingAgentTurn(
         agentId,
         threadId,
       },
-      { overrides: promptVars ? { promptVars } : undefined },
+      { overrides: hasPromptVars ? { promptVars } : undefined },
     ),
   );
   if (!loaded) {
@@ -333,6 +339,7 @@ export async function runWhazingAgentTurn(
         text,
         contactId: event.contact?.id ?? null,
         rawContactName,
+        contactPhone: rawContactPhone,
         cfg,
         base,
       });

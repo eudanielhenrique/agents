@@ -66,6 +66,7 @@ export interface WhazingDebouncePayload {
   burstStartedAt: number;
   contactId: number | null;
   rawContactName: string | null;
+  contactPhone: string | null;
 }
 
 export function parseWhazingDebouncePayload(
@@ -92,6 +93,8 @@ export function parseWhazingDebouncePayload(
     contactId: typeof p.contactId === "number" ? p.contactId : null,
     rawContactName:
       typeof p.rawContactName === "string" ? p.rawContactName : null,
+    contactPhone:
+      typeof p.contactPhone === "string" ? p.contactPhone : null,
   };
 }
 
@@ -104,6 +107,7 @@ export interface ArmWhazingDebounceParams {
   text: string;
   contactId: number | null;
   rawContactName: string | null;
+  contactPhone?: string | null;
   cfg: DebounceConfig;
   base?: PrismaClient;
   now?: Date;
@@ -147,6 +151,7 @@ export async function armWhazingDebounce(
         burstStartedAt,
         contactId: params.contactId,
         rawContactName: params.rawContactName,
+        contactPhone: params.contactPhone ?? null,
       } satisfies Prisma.InputJsonObject;
       await db.schedulerJob.upsert({
         where: {
@@ -177,8 +182,8 @@ export async function armWhazingDebounce(
 }
 
 export async function flushWhazingDebounceJob(
-  job: ClaimedJob,
-  base: PrismaClient,
+  job: SchedulerJob,
+  base: PrismaClient = basePrisma,
 ): Promise<JobResult> {
   const payload = parseWhazingDebouncePayload(job.payload);
   if (!payload || payload.texts.length === 0) return { outcome: "done" };
@@ -198,9 +203,15 @@ export async function flushWhazingDebounceJob(
   if (!inbox) return { outcome: "done" };
   const agentId = inbox.agentId;
 
-  const promptVars = looksLikePersonName(payload.rawContactName)
-    ? { nome_contato: payload.rawContactName as string }
-    : undefined;
+  const promptVars: Record<string, string> = {};
+  if (looksLikePersonName(payload.rawContactName)) {
+    promptVars.nome_contato = payload.rawContactName as string;
+  }
+  if (payload.contactPhone) {
+    promptVars.telefone_contato = payload.contactPhone;
+  }
+  const hasPromptVars = Object.keys(promptVars).length > 0;
+  
   const loaded = await runScopedOn(base, sysCtx(tenantId), (db) =>
     loadAgentConfig(
       db,
@@ -211,7 +222,7 @@ export async function flushWhazingDebounceJob(
         agentId,
         threadId,
       },
-      { overrides: promptVars ? { promptVars } : undefined },
+      { overrides: hasPromptVars ? { promptVars } : undefined },
     ),
   );
   if (!loaded) return { outcome: "done" };

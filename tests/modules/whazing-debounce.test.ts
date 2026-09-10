@@ -30,6 +30,7 @@ describe("parseWhazingDebouncePayload", () => {
       burstStartedAt: 1000,
       contactId: 42,
       rawContactName: "Daniel",
+      contactPhone: "5527988693358",
     };
     expect(parseWhazingDebouncePayload(payload)).toEqual(payload);
   });
@@ -44,6 +45,7 @@ describe("parseWhazingDebouncePayload", () => {
     expect(parsed?.queueId).toBeNull();
     expect(parsed?.contactId).toBeNull();
     expect(parsed?.rawContactName).toBeNull();
+    expect(parsed?.contactPhone).toBeNull();
     expect(typeof parsed?.burstStartedAt).toBe("number");
   });
 
