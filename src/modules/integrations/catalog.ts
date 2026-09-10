@@ -33,6 +33,15 @@ export const CATALOG: ReadonlyArray<CatalogEntry> = [
     supportsInbound: false,
     defaultInboundAuth: "NONE",
   },
+  {
+    catalogType: "DELIVERY",
+    label: "Entregas & Frete (Uber / OSRM)",
+    kind: "TOOLPACK",
+    description:
+      "Cálculo inteligente de rotas, distância e frete para entregas. Suporta modo 100% gratuito (OpenStreetMap + OSRM) e modo oficial Uber Direct via API com cotações em tempo real.",
+    supportsInbound: false,
+    defaultInboundAuth: "NONE",
+  },
   // NOTE: Nuvemshop (NUVEMSHOP) is implemented (src/modules/integrations/toolpacks/nuvemshop.ts,
   // the OAuth connect flow in nuvemshop-oauth.ts/oauth-nuvemshop.controller.ts) but pulled from
   // the catalog on standby — the Partner App redirect URL / multi-store OAuth flow needs sorting

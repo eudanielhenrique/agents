@@ -9,7 +9,6 @@ import type {
   HandoffUiState,
   KanbanWhazingBoardState,
   ToolCatalog,
-  WhazingIntakeUiState,
   WhazingPixUiState,
 } from "./types";
 
@@ -30,8 +29,6 @@ interface ToolsTabProps {
   >;
   whazingPix: WhazingPixUiState | null;
   setWhazingPix: React.Dispatch<React.SetStateAction<WhazingPixUiState | null>>;
-  whazingIntake: WhazingIntakeUiState;
-  setWhazingIntake: React.Dispatch<React.SetStateAction<WhazingIntakeUiState>>;
   customAttributeInstructions: string;
   setCustomAttributeInstructions: (v: string) => void;
   labelInstructions: string;
@@ -78,8 +75,6 @@ export function ToolsTab({
   setKanbanWhazingBoard,
   whazingPix,
   setWhazingPix,
-  whazingIntake,
-  setWhazingIntake,
   customAttributeInstructions,
   setCustomAttributeInstructions,
   labelInstructions,
@@ -146,8 +141,6 @@ export function ToolsTab({
             setKanbanWhazingBoard={setKanbanWhazingBoard}
             whazingPix={whazingPix}
             setWhazingPix={setWhazingPix}
-            whazingIntake={whazingIntake}
-            setWhazingIntake={setWhazingIntake}
             customAttributeInstructions={customAttributeInstructions}
             setCustomAttributeInstructions={setCustomAttributeInstructions}
             labelInstructions={labelInstructions}

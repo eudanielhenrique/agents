@@ -500,6 +500,11 @@ export function IntegrationEditModal({
         return t("integrations.catalog.GOOGLE_DRIVE.label", "Google Drive");
       case "NUVEMSHOP":
         return t("integrations.catalog.NUVEMSHOP.label", "Nuvemshop");
+      case "DELIVERY":
+        return t(
+          "integrations.catalog.DELIVERY.label",
+          "Entregas & Frete (Uber / OSRM)",
+        );
       default:
         return c?.label ?? "";
     }
@@ -525,6 +530,11 @@ export function IntegrationEditModal({
         return t(
           "integrations.catalog.NUVEMSHOP.description",
           "Look up orders and search products in a connected Nuvemshop store.",
+        );
+      case "DELIVERY":
+        return t(
+          "integrations.catalog.DELIVERY.description",
+          "Cálculo inteligente de rotas e frete para entregas (cotação oficial Uber Direct e modo gratuito OpenStreetMap / OSRM).",
         );
       default:
         return c?.description ?? "";
@@ -1191,6 +1201,177 @@ export function IntegrationEditModal({
                   </option>
                 </Select>
               </FormField>
+            )}
+
+            {form.catalogType === "DELIVERY" && (
+              <div className="flex flex-col gap-4">
+                <FormField
+                  label={t(
+                    "integrations.delivery.originAddress",
+                    "Endereço da Loja / Ateliê (Origem Padrão)",
+                  )}
+                  description={t(
+                    "integrations.delivery.originAddressHint",
+                    "Endereço fixo de onde saem os produtos (ex: Av. dos Italianos, 1406 Loja A, Rocha Miranda, Rio de Janeiro - RJ).",
+                  )}
+                >
+                  <Input
+                    value={(cfg.originAddress as string) ?? ""}
+                    onChange={(e) => setCfg({ originAddress: e.target.value })}
+                    placeholder="Av. dos Italianos, 1406 Loja A, Rocha Miranda, Rio de Janeiro, RJ"
+                  />
+                </FormField>
+
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <FormField
+                    label={t(
+                      "integrations.delivery.cityDefault",
+                      "Cidade / Estado Padrão",
+                    )}
+                    description={t(
+                      "integrations.delivery.cityDefaultHint",
+                      "Usado para refinar a busca quando o cliente só informa o bairro.",
+                    )}
+                  >
+                    <Input
+                      value={
+                        (cfg.cityDefault as string) ?? "Rio de Janeiro, RJ"
+                      }
+                      onChange={(e) => setCfg({ cityDefault: e.target.value })}
+                      placeholder="Rio de Janeiro, RJ"
+                    />
+                  </FormField>
+
+                  <FormField
+                    label={t(
+                      "integrations.delivery.pricingMode",
+                      "Modo de Cotação",
+                    )}
+                    description={t(
+                      "integrations.delivery.pricingModeHint",
+                      "Híbrido tenta Uber Direct oficial e cai para o Gratuito em caso de erro.",
+                    )}
+                  >
+                    <Select
+                      value={(cfg.pricingMode as string) ?? "hybrid"}
+                      onChange={(e) => setCfg({ pricingMode: e.target.value })}
+                    >
+                      <option value="hybrid">
+                        {t(
+                          "integrations.delivery.modeHybrid",
+                          "Híbrido (Uber Direct + Fallback Gratuito OSRM)",
+                        )}
+                      </option>
+                      <option value="free_osrm_only">
+                        {t(
+                          "integrations.delivery.modeFreeOnly",
+                          "100% Gratuito (OpenStreetMap + OSRM)",
+                        )}
+                      </option>
+                      <option value="uber_direct_only">
+                        {t(
+                          "integrations.delivery.modeUberOnly",
+                          "Apenas Uber Direct (Oficial)",
+                        )}
+                      </option>
+                    </Select>
+                  </FormField>
+                </div>
+
+                <div className="rounded-lg border border-border bg-bg-secondary p-3">
+                  <p className="mb-2 font-medium text-text-primary text-xs">
+                    {t(
+                      "integrations.delivery.formulaTitle",
+                      "Parâmetros do Frete Gratuito / Estimado",
+                    )}
+                  </p>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <FormField
+                      label={t(
+                        "integrations.delivery.baseFee",
+                        "Taxa Base (R$)",
+                      )}
+                    >
+                      <Input
+                        type="number"
+                        step="0.5"
+                        value={String(cfg.baseFee ?? 8.0)}
+                        onChange={(e) =>
+                          setCfg({ baseFee: parseFloat(e.target.value) || 0 })
+                        }
+                      />
+                    </FormField>
+                    <FormField
+                      label={t(
+                        "integrations.delivery.pricePerKm",
+                        "Por KM (R$)",
+                      )}
+                    >
+                      <Input
+                        type="number"
+                        step="0.5"
+                        value={String(cfg.pricePerKm ?? 2.5)}
+                        onChange={(e) =>
+                          setCfg({
+                            pricePerKm: parseFloat(e.target.value) || 0,
+                          })
+                        }
+                      />
+                    </FormField>
+                    <FormField
+                      label={t(
+                        "integrations.delivery.pricePerMinute",
+                        "Por Minuto (R$)",
+                      )}
+                    >
+                      <Input
+                        type="number"
+                        step="0.05"
+                        value={String(cfg.pricePerMinute ?? 0.35)}
+                        onChange={(e) =>
+                          setCfg({
+                            pricePerMinute: parseFloat(e.target.value) || 0,
+                          })
+                        }
+                      />
+                    </FormField>
+                    <FormField
+                      label={t(
+                        "integrations.delivery.minimumFee",
+                        "Valor Mínimo (R$)",
+                      )}
+                    >
+                      <Input
+                        type="number"
+                        step="1.0"
+                        value={String(cfg.minimumFee ?? 12.0)}
+                        onChange={(e) =>
+                          setCfg({
+                            minimumFee: parseFloat(e.target.value) || 0,
+                          })
+                        }
+                      />
+                    </FormField>
+                  </div>
+                </div>
+
+                <FormField
+                  label={t(
+                    "integrations.delivery.uberCustomerId",
+                    "Uber Customer ID (Opcional)",
+                  )}
+                  description={t(
+                    "integrations.delivery.uberCustomerIdHint",
+                    "Necessário apenas se sua conta Uber Direct exigir o ID de cliente comercial.",
+                  )}
+                >
+                  <Input
+                    value={(cfg.uberCustomerId as string) ?? ""}
+                    onChange={(e) => setCfg({ uberCustomerId: e.target.value })}
+                    placeholder="ex: cus_123456"
+                  />
+                </FormField>
+              </div>
             )}
 
             {form.catalogType === "NUVEMSHOP" && (

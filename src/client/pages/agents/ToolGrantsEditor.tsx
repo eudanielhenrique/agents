@@ -42,7 +42,6 @@ import type {
   HandoffUiState,
   KanbanWhazingBoardState,
   ToolCatalog,
-  WhazingIntakeUiState,
   WhazingPixUiState,
 } from "./types";
 
@@ -138,10 +137,6 @@ interface Props {
   // tool argument. null = not configured (the tools decline). Persisted in agent.settings.whazingPix.
   whazingPix: WhazingPixUiState | null;
   setWhazingPix: React.Dispatch<React.SetStateAction<WhazingPixUiState | null>>;
-  // Whazing intake routing (queue-by-history + campaign tag/notify). Persisted in
-  // agent.settings.whazingIntake.
-  whazingIntake: WhazingIntakeUiState;
-  setWhazingIntake: React.Dispatch<React.SetStateAction<WhazingIntakeUiState>>;
   // Discovered MCP tools + each server's `instructions` + per-connection collapse state. Lifted to
   // AgentEditorPage so switching agent tabs (which unmounts this editor) does not lose the discovery.
   mcpTools: Record<string, DiscoveredMcpTool[]>;
@@ -469,8 +464,6 @@ export function ToolGrantsEditor({
   setUpdateKanbanTaskInstructions,
   whazingPix,
   setWhazingPix,
-  whazingIntake,
-  setWhazingIntake,
   mcpTools,
   setMcpTools,
   mcpInstructions,
@@ -1576,150 +1569,6 @@ export function ToolGrantsEditor({
           </p>
         )}
       </CollapsibleSection>
-
-      <div>
-        <h3 className="mb-2 font-medium text-sm text-text-primary">
-          {t("editor.whazingHistoryRoutingTitle", "Whazing history routing")}
-        </h3>
-        <p className="mb-3 text-text-muted text-xs">
-          {t(
-            "editor.whazingHistoryRoutingSectionHint",
-            "Whazing-only. Routes a brand new ticket to a human queue when the contact already has an ongoing conversation or was already answered. Independent of campaign tagging below — some clients want this, some don't. Off by default.",
-          )}
-        </p>
-        <ConfigurableToolCard
-          selected={whazingIntake.historyRoutingEnabled}
-          onToggle={() =>
-            setWhazingIntake({
-              ...whazingIntake,
-              historyRoutingEnabled: !whazingIntake.historyRoutingEnabled,
-            })
-          }
-          title={t(
-            "editor.whazingHistoryRoutingTitle",
-            "Whazing history routing",
-          )}
-          description={t(
-            "editor.whazingHistoryRoutingDescription",
-            "Move a new ticket to the escalate queue when the contact has prior history or was already answered.",
-          )}
-          configured={whazingIntake.escalateQueueId !== ""}
-        >
-          <FormField
-            label={t("editor.whazingEscalateQueueId", "Escalate queue ID")}
-            description={t(
-              "editor.whazingEscalateQueueIdHint",
-              "Whazing queue ID a ticket moves to once the contact has prior history, was already answered, or a human just took over. Find it in your Whazing dashboard (queue list) — Whazing has no API to list queues, so this is typed by hand.",
-            )}
-          >
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={whazingIntake.escalateQueueId}
-              onChange={(e) =>
-                setWhazingIntake({
-                  ...whazingIntake,
-                  escalateQueueId: e.target.value,
-                })
-              }
-              placeholder="ex.: 15"
-              className="w-full rounded-lg border border-border bg-bg-secondary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50"
-            />
-          </FormField>
-        </ConfigurableToolCard>
-      </div>
-
-      <div>
-        <h3 className="mb-2 font-medium text-sm text-text-primary">
-          {t("editor.whazingCampaignTitle", "Whazing campaign tagging")}
-        </h3>
-        <p className="mb-3 text-text-muted text-xs">
-          {t(
-            "editor.whazingCampaignSectionHint",
-            "Whazing-only. Tags and notifies a campaign-sourced lead (Meta/Instagram click-to-WhatsApp ads). Independent of history routing above — most clients running ads want this on. Off by default.",
-          )}
-        </p>
-        <ConfigurableToolCard
-          selected={whazingIntake.campaignEnabled}
-          onToggle={() =>
-            setWhazingIntake({
-              ...whazingIntake,
-              campaignEnabled: !whazingIntake.campaignEnabled,
-            })
-          }
-          title={t("editor.whazingCampaignTitle", "Whazing campaign tagging")}
-          description={t(
-            "editor.whazingCampaignDescription",
-            "Tag + notify a campaign-sourced lead.",
-          )}
-          configured={whazingIntake.campaignTagId !== ""}
-        >
-          <FormField
-            label={t("editor.whazingCampaignTagId", "Campaign lead tag ID")}
-            description={t(
-              "editor.whazingCampaignTagIdHint",
-              "Whazing tag ID applied to a contact whose message carries a click-to-WhatsApp-ad (ctwa_ad) signal. Empty = no tagging.",
-            )}
-          >
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={whazingIntake.campaignTagId}
-              onChange={(e) =>
-                setWhazingIntake({
-                  ...whazingIntake,
-                  campaignTagId: e.target.value,
-                })
-              }
-              placeholder="ex.: 31"
-              className="w-full rounded-lg border border-border bg-bg-secondary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50"
-            />
-          </FormField>
-          <FormField
-            label={t("editor.whazingCampaignNotifyPhone", "Notify phone")}
-            description={t(
-              "editor.whazingCampaignNotifyPhoneHint",
-              "Internal number notified about a campaign lead. Empty = no notification.",
-            )}
-          >
-            <input
-              type="text"
-              value={whazingIntake.campaignNotifyPhone}
-              onChange={(e) =>
-                setWhazingIntake({
-                  ...whazingIntake,
-                  campaignNotifyPhone: e.target.value,
-                })
-              }
-              placeholder="ex.: 5527999594959"
-              className="w-full rounded-lg border border-border bg-bg-secondary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50"
-            />
-          </FormField>
-          <FormField
-            label={t(
-              "editor.whazingCampaignNotifyMessage",
-              "Notify message template",
-            )}
-            description={t(
-              "editor.whazingCampaignNotifyMessageHint",
-              "Sent to the notify phone. {{ctwaClid}} is replaced with the ad click id when present.",
-            )}
-          >
-            <Textarea
-              value={whazingIntake.campaignNotifyMessage}
-              onChange={(e) =>
-                setWhazingIntake({
-                  ...whazingIntake,
-                  campaignNotifyMessage: e.target.value,
-                })
-              }
-              rows={3}
-            />
-          </FormField>
-        </ConfigurableToolCard>
-      </div>
 
       <ToolEditModal modal={toolModal} sharedNotice onSaved={onToolSaved} />
       <McpEditModal modal={mcpModal} sharedNotice onSaved={onMcpSaved} />

@@ -39,6 +39,11 @@ export function IntegrationsPanel() {
           "integrations.catalog.GOOGLE_CALENDAR.label",
           "Google Calendar",
         );
+      case "DELIVERY":
+        return t(
+          "integrations.catalog.DELIVERY.label",
+          "Entregas & Frete (Uber / OSRM)",
+        );
       default:
         return c?.label ?? "";
     }

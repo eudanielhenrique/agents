@@ -2,6 +2,7 @@
 // registry API. Consumers MUST import from here (not ./types directly) so the registry is
 // populated before buildToolpackTools runs.
 import "./asaas";
+import "./delivery";
 import "./google-calendar";
 import "./google-drive";
 import "./nuvemshop";

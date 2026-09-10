@@ -93,8 +93,7 @@ export function parseWhazingDebouncePayload(
     contactId: typeof p.contactId === "number" ? p.contactId : null,
     rawContactName:
       typeof p.rawContactName === "string" ? p.rawContactName : null,
-    contactPhone:
-      typeof p.contactPhone === "string" ? p.contactPhone : null,
+    contactPhone: typeof p.contactPhone === "string" ? p.contactPhone : null,
   };
 }
 
@@ -182,7 +181,7 @@ export async function armWhazingDebounce(
 }
 
 export async function flushWhazingDebounceJob(
-  job: SchedulerJob,
+  job: ClaimedJob,
   base: PrismaClient = basePrisma,
 ): Promise<JobResult> {
   const payload = parseWhazingDebouncePayload(job.payload);
@@ -211,7 +210,7 @@ export async function flushWhazingDebounceJob(
     promptVars.telefone_contato = payload.contactPhone;
   }
   const hasPromptVars = Object.keys(promptVars).length > 0;
-  
+
   const loaded = await runScopedOn(base, sysCtx(tenantId), (db) =>
     loadAgentConfig(
       db,
