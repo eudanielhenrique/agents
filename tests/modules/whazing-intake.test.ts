@@ -272,3 +272,32 @@ describe("hasActivePriorHistory", () => {
     ).toBe(true);
   });
 });
+
+describe("runWhazingIntake", () => {
+  test("defaults to bot with botQueueId null when instance has no intake configuration", async () => {
+    const { runWhazingIntake } = await import("@/modules/whazing/intake");
+    const mockPrisma = makeMockPrisma({
+      instance: { settings: {} },
+      inboxes: [],
+    });
+
+    const routing = await runWhazingIntake({
+      tenantId: BigInt(1),
+      instanceId: BigInt(4),
+      event: {
+        event: "message_received",
+        ticketId: 12949,
+        queueId: 32,
+        assignedUserId: null,
+        status: "pending",
+        sendType: null,
+        campaignSignal: null,
+        contact: { id: 5151, name: "Daniel H", phone: "5527988693358", whatsappId: null },
+        message: { id: "msg-1", body: "Oi", fromMe: false, isAutomation: false, attachments: [], timestamp: Date.now() },
+      },
+      base: mockPrisma,
+    });
+
+    expect(routing).toEqual({ routedTo: "bot", botQueueId: null });
+  });
+});

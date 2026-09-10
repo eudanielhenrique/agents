@@ -150,7 +150,7 @@ export async function runWhazingIntake(
   if (ticketId == null) return { routedTo: "skipped" };
 
   const resolved = await resolveWhazingIntake(base, tenantId, instanceId);
-  if (!resolved) return { routedTo: "skipped" };
+  if (!resolved) return { routedTo: "bot", botQueueId: null };
 
   const client = await loadWhazingClient(tenantId, instanceId, base);
   const botQueueId =
