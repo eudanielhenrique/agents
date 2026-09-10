@@ -169,6 +169,50 @@ describe("normalizeWhazingEvent", () => {
     expect(fromBody?.message?.body).toBe("from body");
   });
 
+  test("resolves interactive choice into message body when button is clicked", () => {
+    // Direct buttonOrListid on message
+    const direct = normalizeWhazingEvent({
+      event: "message_received",
+      ticketId: 1,
+      message: {
+        body: "Quero esse modelo",
+        buttonOrListid: "Quero reservar o bolo BK-310",
+        fromMe: false,
+      },
+    });
+    expect(direct?.message?.body).toBe(
+      "Quero esse modelo (Quero reservar o bolo BK-310)",
+    );
+
+    // SelectedID from dataJson
+    const fromDataJson = normalizeWhazingEvent({
+      event: "message_received",
+      ticketId: 1,
+      message: { body: "Quero esse modelo", fromMe: false },
+      dataJson: JSON.stringify({
+        message: {
+          content: {
+            selectedID: "BK-310",
+            selectedDisplayText: "Quero esse modelo",
+          },
+        },
+      }),
+    });
+    expect(fromDataJson?.message?.body).toBe("Quero esse modelo (BK-310)");
+
+    // Identical text avoids duplicate repetition
+    const identical = normalizeWhazingEvent({
+      event: "message_received",
+      ticketId: 1,
+      message: {
+        body: "BK-310",
+        buttonOrListid: "BK-310",
+        fromMe: false,
+      },
+    });
+    expect(identical?.message?.body).toBe("BK-310");
+  });
+
   test("detects automation messages by typebotId / integrationId", () => {
     const typebot = normalizeWhazingEvent({
       event: "message_received",

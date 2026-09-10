@@ -123,13 +123,75 @@ function normalizeAttachment(raw: unknown): NormalizedWhazingAttachment {
   };
 }
 
-function normalizeMessage(raw: unknown): NormalizedWhazingMessage | null {
+// Extracts the selected button/list option ID from WhatsApp interactive messages.
+// Whazing/Uazapi surfaces this in message.buttonOrListid, message.content.selectedID, or dataJson.
+function extractInteractiveChoice(
+  m: Record<string, unknown>,
+  dataJson?: unknown,
+): string | null {
+  const content =
+    m.content && typeof m.content === "object"
+      ? (m.content as Record<string, unknown>)
+      : null;
+  const direct =
+    str(m.buttonOrListid) ??
+    str(content?.selectedID) ??
+    str(content?.buttonOrListid) ??
+    str(m.selectedButtonId);
+  if (direct) return direct;
+
+  if (typeof dataJson === "string" && dataJson !== "") {
+    try {
+      const parsed = JSON.parse(dataJson);
+      const msg = parsed?.message;
+      const parsedContent = msg?.content;
+      return (
+        str(msg?.buttonOrListid) ??
+        str(parsedContent?.selectedID) ??
+        str(parsedContent?.buttonOrListid) ??
+        null
+      );
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function resolveMessageBody(
+  rawBody: string | null,
+  interactiveChoice: string | null,
+): string | null {
+  if (!interactiveChoice) return rawBody;
+  if (!rawBody) return interactiveChoice;
+  if (rawBody.trim().toLowerCase() === interactiveChoice.trim().toLowerCase()) {
+    return rawBody;
+  }
+
+  // If interactiveChoice is already a full sentence that includes rawBody, prefer it
+  if (interactiveChoice.toLowerCase().includes(rawBody.toLowerCase())) {
+    return interactiveChoice;
+  }
+
+  // If rawBody is generic (e.g. "Quero esse modelo") and interactiveChoice carries the specific selection
+  // (e.g. "Quero reservar o bolo BK-310" or "BK-310"), combine them so the agent knows the selection.
+  return `${rawBody} (${interactiveChoice})`;
+}
+
+function normalizeMessage(
+  raw: unknown,
+  dataJson?: unknown,
+): NormalizedWhazingMessage | null {
   if (!raw || typeof raw !== "object") return null;
   const m = raw as Record<string, unknown>;
   const rawAttachments = Array.isArray(m.attachments) ? m.attachments : [];
+  const rawBody = str(m.body) ?? str(m.text) ?? str(m.vote);
+  const interactiveChoice = extractInteractiveChoice(m, dataJson);
+  const body = resolveMessageBody(rawBody, interactiveChoice);
+
   return {
     id: str(m.id) ?? str(m.messageId),
-    body: str(m.body) ?? str(m.text) ?? null,
+    body,
     fromMe: m.fromMe === true || m.fromMe === "true",
     // Typebot or integration automation — never reply to these
     isAutomation: !!(m.typebotId ?? m.integrationId),
@@ -198,7 +260,7 @@ export function normalizeWhazingEvent(
   // Shape (B): message fields at root — messageId, messageBody, fromMe, mediaType, mediaUrl.
   let message: NormalizedWhazingMessage | null;
   if (r.message && typeof r.message === "object") {
-    message = normalizeMessage(r.message);
+    message = normalizeMessage(r.message, r.dataJson);
   } else if (r.messageId != null || r.messageBody != null) {
     const attachments: NormalizedWhazingAttachment[] = [];
     // `mediaType` classifies EVERY message ("chat" for plain text, "audio" for voice, ...) — it is
@@ -213,9 +275,16 @@ export function normalizeWhazingEvent(
         fileName: null,
       });
     }
+    const interactiveChoice =
+      str(r.buttonOrListid) ??
+      str(r.selectedButtonId) ??
+      extractInteractiveChoice({}, r.dataJson);
+    const rawBody = str(r.messageBody) ?? str(r.text) ?? str(r.vote);
+    const body = resolveMessageBody(rawBody, interactiveChoice);
+
     message = {
       id: str(r.messageId),
-      body: str(r.messageBody),
+      body,
       fromMe: r.fromMe === true || r.fromMe === "true",
       isAutomation: false,
       attachments,

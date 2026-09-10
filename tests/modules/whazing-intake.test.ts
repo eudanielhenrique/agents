@@ -292,8 +292,20 @@ describe("runWhazingIntake", () => {
         status: "pending",
         sendType: null,
         campaignSignal: null,
-        contact: { id: 5151, name: "Daniel H", phone: "5527988693358", whatsappId: null },
-        message: { id: "msg-1", body: "Oi", fromMe: false, isAutomation: false, attachments: [], timestamp: Date.now() },
+        contact: {
+          id: 5151,
+          name: "Daniel H",
+          phone: "5527988693358",
+          whatsappId: null,
+        },
+        message: {
+          id: "msg-1",
+          body: "Oi",
+          fromMe: false,
+          isAutomation: false,
+          attachments: [],
+          timestamp: Date.now(),
+        },
       },
       base: mockPrisma,
     });
