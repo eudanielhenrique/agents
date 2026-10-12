@@ -1,10 +1,13 @@
 import { Elysia, t } from "elysia";
 import logger from "@/api/lib/logger";
 import { doc, errorResponse, jsonResponse } from "@/api/lib/openapi";
+import { sanitizeErrorMessage } from "@/lib/redact";
 import {
+  markChatwootDeliveryFailed,
   processChatwootDelivery,
   receiveChatwootWebhook,
 } from "@/modules/chatwoot/webhook";
+import { emitFlowEvent } from "@/modules/flowlog/service";
 
 // Public, JWT-less Chatwoot Agent Bot webhook receiver. Not behind tenancyPlugin/requireAuth:
 // the opaque routeToken resolves the tenant and the per-instance HMAC secret authenticates the
@@ -50,10 +53,25 @@ export const chatwootController = new Elysia({
         agentBotId,
         normalized,
       }).catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
         logger.error(
           "chatwoot async dispatch failed (delivery %s): %s",
           String(deliveryRowId),
-          err instanceof Error ? err.message : String(err),
+          message,
+        );
+        void markChatwootDeliveryFailed(tenantId, deliveryRowId);
+        emitFlowEvent(
+          { tenantId, turnId: crypto.randomUUID(), source: "inbox" },
+          {
+            stage: "webhook",
+            level: "error",
+            status: "error",
+            errorMessage: sanitizeErrorMessage(message, 300),
+            detail: {
+              transport: "chatwoot",
+              deliveryRowId: String(deliveryRowId),
+            },
+          },
         );
       });
     }

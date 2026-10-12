@@ -1,5 +1,6 @@
 import { HumanMessage } from "@langchain/core/messages";
 import type { PrismaClient } from "@/../generated/prisma/client";
+import logger from "@/api/lib/logger";
 import basePrisma from "@/api/lib/prisma";
 import { getCheckpointer } from "@/graph/checkpointer";
 import { lastAssistantText } from "@/graph/graph";
@@ -25,8 +26,8 @@ import {
   isWithinServiceWindow,
   type ServiceWindowConfig,
 } from "@/modules/service-window/service";
-import { markBotSent } from "@/modules/whazing/bot-send-tracker";
 import { loadWhazingClient } from "./instance";
+import { hasIgnoredTag, resolveIgnoredTags } from "./tags";
 import { buildWhazingNativeTools } from "./tools";
 
 // Whazing's proactive-nudge engine. Parallel to runAgentNudge (src/graph/nudge.ts) but transport-aware
@@ -112,6 +113,29 @@ export async function runWhazingAgentNudge(
 
   const client = await loadWhazingClient(tenantId, instanceId, base);
 
+  const ignoredTags = await resolveIgnoredTags({
+    base,
+    tenantId,
+    agentId,
+    instanceId,
+  });
+  if (conv.contactId != null) {
+    const contact = await client.getContact(conv.contactId).catch(() => null);
+    if (contact?.disableBot || hasIgnoredTag(contact?.tags, ignoredTags)) {
+      logger.info(
+        {
+          contactId: conv.contactId,
+          ticketId,
+          disableBot: contact?.disableBot,
+          tags: contact?.tags,
+          ignoredTags,
+        },
+        "whazing nudge: contact has ignored tag or disableBot — skipping nudge",
+      );
+      return "stale";
+    }
+  }
+
   const flow: FlowContext = {
     tenantId,
     turnId: crypto.randomUUID(),
@@ -154,7 +178,10 @@ export async function runWhazingAgentNudge(
   );
 
   const checkpointer = params.deps?.checkpointer ?? (await getCheckpointer());
-  const graph = await buildModelAndGraph(loaded, tools, { checkpointer });
+  const graph = await buildModelAndGraph(loaded, tools, {
+    checkpointer,
+    tenantId,
+  });
   const callbacks = buildCallbacks(loaded, {
     tenantId,
     threadId,
@@ -197,7 +224,6 @@ export async function runWhazingAgentNudge(
 
   if (mode === "freeform") {
     await client.sendMessage(ticketId, reply);
-    markBotSent(instanceId, ticketId);
     return "messaged";
   }
 

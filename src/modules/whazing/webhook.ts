@@ -3,7 +3,9 @@ import logger from "@/api/lib/logger";
 import basePrisma from "@/api/lib/prisma";
 import { getCheckpointer } from "@/graph/checkpointer";
 import { AppError, UnauthorizedError } from "@/lib/errors";
+import { sanitizeErrorMessage } from "@/lib/redact";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
+import { emitFlowEvent } from "@/modules/flowlog/service";
 import { parseWindows } from "../business-hours/hours";
 import { outOfHoursGate } from "../chatwoot/webhook";
 import { wasRecentlyBotSent } from "./bot-send-tracker";
@@ -19,6 +21,7 @@ import {
   whazingDeliveryId,
 } from "./normalize";
 import { runWhazingAgentTurn, upsertWhazingConversation } from "./runtime";
+import { resolveIgnoredTags } from "./tags";
 import { resolveWhazingGraphThreadId } from "./thread-keys";
 import type { NormalizedWhazingEvent } from "./types";
 
@@ -222,10 +225,23 @@ export async function processWhazingDelivery(
       );
     }
 
-    // Double-gate: skip events that carry no actionable customer message.
+    const inbox = await resolveWhazingInboxAndAgent(
+      base,
+      tenantId,
+      instanceId,
+      normalized.queueId,
+    );
+    const ignoredTags = await resolveIgnoredTags({
+      base,
+      tenantId,
+      agentId: inbox?.agentId,
+      instanceId,
+    });
+
+    // Double-gate: skip events that carry no actionable customer message or carry ignored tags.
     if (
       !isNewIncomingMessage(normalized) ||
-      !shouldWhazingBotHandle(normalized)
+      !shouldWhazingBotHandle(normalized, ignoredTags)
     ) {
       await markProcessed(base, tenantId, deliveryRowId);
       return;
@@ -301,13 +317,29 @@ export async function processWhazingDelivery(
 
     await markProcessed(base, tenantId, deliveryRowId);
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     logger.error(
       "processWhazingDelivery error: tenant=%s delivery=%s: %s",
       String(tenantId),
       String(deliveryRowId),
-      err instanceof Error ? err.message : String(err),
+      message,
     );
-    // Leave in PROCESSING — reaper will reset to PENDING for retry.
+    // The row was previously left in PROCESSING forever on any exception here (no reaper ever
+    // existed to reclaim it, and Whazing does not guarantee webhook redelivery) — a customer
+    // message silently vanished with no trace. Mark it FAILED now so it is visible and alertable;
+    // there is nothing to retry against (the ledger stores no payload, by design, for PII), so
+    // this is an observability fix, not an auto-retry.
+    await markFailed(base, tenantId, deliveryRowId);
+    emitFlowEvent(
+      { tenantId, turnId: crypto.randomUUID(), source: "inbox" },
+      {
+        stage: "webhook",
+        level: "error",
+        status: "error",
+        errorMessage: sanitizeErrorMessage(message, 300),
+        detail: { transport: "whazing", deliveryRowId: String(deliveryRowId) },
+      },
+    );
   }
 }
 
@@ -574,4 +606,22 @@ async function markProcessed(
       data: { status: "PROCESSED", processedAt: new Date() },
     }),
   );
+}
+
+// Best-effort: never let a bookkeeping failure mask the original error that got us here.
+async function markFailed(
+  base: PrismaClient,
+  tenantId: bigint,
+  deliveryRowId: bigint,
+): Promise<void> {
+  try {
+    await runScopedOn(base, sysCtx(tenantId), (db) =>
+      db.whazingWebhookDelivery.update({
+        where: { id: deliveryRowId },
+        data: { status: "FAILED" },
+      }),
+    );
+  } catch (err) {
+    logger.error({ err, deliveryRowId }, "whazing: markFailed itself failed");
+  }
 }

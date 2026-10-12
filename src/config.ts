@@ -42,6 +42,7 @@ const {
   AGENTS_UPDATE_CHECK_URL,
   HUB_UPDATES_TTL_MS,
   AGENT_MODEL_CONCURRENCY,
+  AGENT_MODEL_TIMEOUT_MS,
   AGENT_PROMPT_MAX_CHARS,
   DB_POOL_MAX,
   NUVEMSHOP_CLIENT_ID,
@@ -170,6 +171,13 @@ const config = {
       AGENT_MODEL_CONCURRENCY && Number(AGENT_MODEL_CONCURRENCY) > 0
         ? Number(AGENT_MODEL_CONCURRENCY)
         : 20,
+    // NOTE: a provider that accepts the connection and never answers held a turn (and the
+    // semaphore slot behind it) open indefinitely — no timeout was ever set on the LangChain
+    // client. Bounded here, process-wide, same override pattern as modelConcurrency above.
+    modelTimeoutMs:
+      AGENT_MODEL_TIMEOUT_MS && Number(AGENT_MODEL_TIMEOUT_MS) > 0
+        ? Number(AGENT_MODEL_TIMEOUT_MS)
+        : 90_000,
     // NOTE: Hard cap (characters) on an agent's system prompt, enforced at the service layer for
     // every transport (console/REST/MCP) and at import. A deliberate checkpoint, not a technical
     // ceiling: prompts past tens of KB usually hold knowledge-base content and degrade instruction

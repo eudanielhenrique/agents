@@ -91,6 +91,19 @@ describe("deliverReply", () => {
     expect(rec.typing).toEqual([]);
   });
 
+  test("empty/undefined reply → no send, no crash", async () => {
+    const rec = { sent: [] as string[], typing: [] as boolean[] };
+    const n = await deliverReply(
+      stub(rec),
+      1,
+      undefined as unknown as string,
+      { ...SPLIT_DEFAULTS, enabled: true },
+      noSleep,
+    );
+    expect(n).toBe(0);
+    expect(rec.sent).toEqual([]);
+  });
+
   test("enabled → one send per balloon, with typing toggles", async () => {
     const rec = { sent: [] as string[], typing: [] as boolean[] };
     const n = await deliverReply(

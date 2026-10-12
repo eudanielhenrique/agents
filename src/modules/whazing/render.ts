@@ -8,6 +8,7 @@ import type { NormalizedWhazingEvent } from "./types";
 export function renderWhazingMessage(
   event: NormalizedWhazingEvent,
   transcription?: string | null,
+  extraction?: { kind: "image" | "document"; text: string } | null,
 ): string | null {
   const msg = event.message;
   if (!msg) return null;
@@ -35,16 +36,26 @@ export function renderWhazingMessage(
           : "<mensagem de áudio não audível; peça que o cliente reenvie por texto>",
       );
     } else if (mt === "image" || mt === "sticker") {
-      parts.push("<mensagem-de-imagem />");
+      parts.push(
+        extraction?.kind === "image"
+          ? `<mensagem-de-imagem>${extraction.text}</mensagem-de-imagem>`
+          : "<mensagem de imagem não pôde ser lida; peça que o cliente descreva por texto>",
+      );
     } else if (mt === "video") {
       parts.push("<mensagem-de-video />");
     } else {
       const name = att.fileName?.trim();
-      parts.push(
-        name
-          ? `<mensagem-de-arquivo nome="${name}" />`
-          : "<mensagem-de-arquivo />",
-      );
+      if (extraction?.kind === "document") {
+        parts.push(
+          `<mensagem-de-arquivo>${extraction.text}</mensagem-de-arquivo>`,
+        );
+      } else {
+        parts.push(
+          name
+            ? `<mensagem-de-arquivo nome="${name}" />`
+            : "<mensagem-de-arquivo />",
+        );
+      }
     }
   }
 

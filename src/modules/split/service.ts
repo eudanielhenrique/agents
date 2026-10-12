@@ -1,5 +1,9 @@
 import type { InboxReplyClient } from "@/lib/transport/inbox-client";
-import { type FlowContext, withFlowStage } from "@/modules/flowlog/service";
+import {
+  emitFlowEvent,
+  type FlowContext,
+  withFlowStage,
+} from "@/modules/flowlog/service";
 
 // Humanized delivery: split the agent's reply into several balloons and pace them with a typing
 // indicator + a proportional delay, instead of dumping one wall of text (the n8n "Quebrar e enviar
@@ -106,9 +110,6 @@ const realSleep = (ms: number): Promise<void> =>
 
 // Sends the reply, split + paced when enabled. Typing toggles are best-effort (admin-token, may be
 // unsupported on a channel) and never block the send. The sleep is injectable for tests.
-// onChunkSent fires after EACH balloon (not just once at the end) — Whazing's echo-vs-human-takeover
-// guard (bot-send-tracker.ts) needs to know a send happened before that balloon's echo can round-trip
-// back through the webhook, not after the whole multi-balloon delivery finishes.
 export async function deliverReply(
   client: InboxReplyClient,
   conversationId: number,
@@ -116,16 +117,30 @@ export async function deliverReply(
   cfg: SplitConfig,
   sleep: (ms: number) => Promise<void> = realSleep,
   flow?: FlowContext,
-  onChunkSent?: (conversationId: number) => void,
 ): Promise<number> {
   return withFlowStage(
     flow,
     "split",
     { detail: { enabled: cfg.enabled } },
     async () => {
+      // Defensive: a reply that came back empty/undefined (e.g. an output guardrail misconfigured
+      // with no templateMessage, or any other upstream gap) must never crash the turn — that crash
+      // used to bubble up as an uncaught error that got misread as "the conversation needs a human"
+      // (2026-10 incident: real sales leads sat unanswered because of it). Skip the send, log it as
+      // a visible warning, and let the turn finish cleanly instead.
+      if (!reply?.trim()) {
+        if (flow) {
+          emitFlowEvent(flow, {
+            stage: "split",
+            level: "warn",
+            status: "ok",
+            detail: { enabled: cfg.enabled, outcome: "empty_reply" },
+          });
+        }
+        return 0;
+      }
       if (!cfg.enabled) {
         await client.sendMessage(conversationId, reply);
-        onChunkSent?.(conversationId);
         return 1;
       }
       const chunks = splitReply(reply, cfg);
@@ -133,7 +148,6 @@ export async function deliverReply(
         await client.toggleTyping(conversationId, true).catch(() => undefined);
         await sleep(typingDelayMs(chunk, cfg));
         await client.sendMessage(conversationId, chunk);
-        onChunkSent?.(conversationId);
       }
       await client.toggleTyping(conversationId, false).catch(() => undefined);
       return chunks.length;

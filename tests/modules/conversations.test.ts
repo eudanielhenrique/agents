@@ -157,7 +157,11 @@ describe.skipIf(!dbUp)("listConversations", () => {
     const first = await listConversations(ctx(tenantA), { limit: 1 }, appDb);
     expect(first.items).toHaveLength(1);
     expect(first.items[0]?.chatwootConversationId).toBe(101);
-    expect(first.nextCursor).toBe(first.items[0]?.id ?? null);
+    expect(first.nextCursor).toBe(
+      first.items[0]?.lastEventAt
+        ? `t:${new Date(first.items[0].lastEventAt).getTime()}`
+        : null,
+    );
     const second = await listConversations(
       ctx(tenantA),
       { limit: 1, cursor: first.nextCursor ?? undefined },

@@ -47,6 +47,7 @@ export interface NormalizedWhazingContact {
   phone: string | null;
   // WhatsApp LID (newer API format); used as channel identifier in the thread key.
   whatsappId: string | null;
+  tags?: string[];
 }
 
 // A WhatsApp "click-to-WhatsApp ad" (ctwa_ad) entry signal, read from the message's contextInfo
@@ -61,6 +62,7 @@ export interface WhazingCampaignSignal {
   // instead of asking the customer to repeat it.
   adTitle: string | null;
   adBody: string | null;
+  thumbnailUrl?: string | null;
 }
 
 export interface NormalizedWhazingEvent {
@@ -77,4 +79,5 @@ export interface NormalizedWhazingEvent {
   campaignSignal: WhazingCampaignSignal | null;
   contact: NormalizedWhazingContact | null;
   message: NormalizedWhazingMessage | null;
+  tags?: string[];
 }

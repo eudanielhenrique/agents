@@ -27,14 +27,19 @@ import type { ChatwootClient } from "@/modules/chatwoot/client";
 import { emitFlowEvent, type FlowContext } from "@/modules/flowlog/service";
 import { analyzeGuardrail } from "@/modules/guardrails/analyze";
 import { deliverReply } from "@/modules/split/service";
-import { markBotSent } from "@/modules/whazing/bot-send-tracker";
 import { looksLikePersonName } from "@/modules/whazing/contact-name";
 import type { WhazingClient } from "./client";
 import { armWhazingDebounce, resolveWhazingDebounceConfig } from "./debounce";
 import { resolveWhazingInboxAndAgent } from "./inbox-resolve";
 import { loadWhazingClient } from "./instance";
-import { resolveWhazingSttConfig, transcribeWhazingAudio } from "./media";
+import {
+  extractWhazingImage,
+  resolveWhazingSttConfig,
+  resolveWhazingVisionConfig,
+  transcribeWhazingAudio,
+} from "./media";
 import { renderWhazingMessage } from "./render";
+import { hasIgnoredTag, resolveIgnoredTags } from "./tags";
 import { resolveWhazingGraphThreadId } from "./thread-keys";
 import { buildWhazingNativeTools } from "./tools";
 import type { NormalizedWhazingEvent } from "./types";
@@ -143,6 +148,22 @@ export async function runWhazingAgentTurn(
   );
   if (!inbox) return "no-agent";
   const agentId = inbox.agentId;
+
+  const ignoredTags = await resolveIgnoredTags({
+    base,
+    tenantId,
+    agentId,
+    instanceId,
+  });
+
+  const eventTags = [...(event.tags ?? []), ...(event.contact?.tags ?? [])];
+  if (hasIgnoredTag(eventTags, ignoredTags)) {
+    logger.info(
+      { ticketId, contactId: event.contact?.id, eventTags, ignoredTags },
+      "whazing: ticket or contact has ignored tags — skipping turn",
+    );
+    return "skipped";
+  }
 
   const threadId = resolveWhazingGraphThreadId(tenantId, instanceId, {
     whatsappId: event.contact?.whatsappId ?? undefined,
@@ -279,7 +300,39 @@ export async function runWhazingAgentTurn(
     }
   }
 
-  let text = renderWhazingMessage(event, transcription);
+  // Attempt vision extraction for the first image/sticker/document attachment (best-effort — never
+  // strands the delivery). Without this, every image the customer sends (a cake reference, a
+  // screenshot of the ad) rendered as a content-free marker and the agent had nothing to react to.
+  let imageExtraction: { kind: "image" | "document"; text: string } | null =
+    null;
+  const visionCfg = await resolveWhazingVisionConfig(tenantId, agentId, base);
+  if (visionCfg) {
+    const visualAtt = event.message?.attachments.find(
+      (a) =>
+        a.mediaUrl &&
+        (a.mediaType === "image" ||
+          a.mediaType === "sticker" ||
+          a.mediaType === "document"),
+    );
+    if (visualAtt?.mediaUrl) {
+      imageExtraction = await extractWhazingImage({
+        mediaUrl: visualAtt.mediaUrl,
+        cfg: visionCfg,
+        tenantId,
+        base,
+        flow,
+      }).catch((e) => {
+        logger.warn(
+          "whazing vision unexpected error (ticket=%s): %s",
+          String(ticketId),
+          e instanceof Error ? e.message : String(e),
+        );
+        return null;
+      });
+    }
+  }
+
+  let text = renderWhazingMessage(event, transcription, imageExtraction);
   if (!text) {
     clearTurnInFlight(threadId);
     return "skipped";
@@ -291,11 +344,27 @@ export async function runWhazingAgentTurn(
   // Best-effort: a failed fetch just means this turn runs without the reminder, never blocks it.
   if (event.contact?.id != null) {
     const contact = await client.getContact(event.contact.id).catch(() => null);
-    if (contact && contact.extraInfo.length > 0) {
-      const known = contact.extraInfo
-        .map((f) => `${f.name}: ${f.value}`)
-        .join("; ");
-      text = `[Dados já coletados sobre este paciente — NÃO pergunte de novo: ${known}]\n\n${text}`;
+    if (contact) {
+      if (contact.disableBot || hasIgnoredTag(contact.tags, ignoredTags)) {
+        logger.info(
+          {
+            contactId: event.contact.id,
+            ticketId,
+            disableBot: contact.disableBot,
+            tags: contact.tags,
+            ignoredTags,
+          },
+          "whazing: contact has ignored tag or disableBot — skipping turn",
+        );
+        clearTurnInFlight(threadId);
+        return "skipped";
+      }
+      if (contact.extraInfo.length > 0) {
+        const known = contact.extraInfo
+          .map((f) => `${f.name}: ${f.value}`)
+          .join("; ");
+        text = `[Dados já coletados sobre este paciente — NÃO pergunte de novo: ${known}]\n\n${text}`;
+      }
     }
   }
 
@@ -470,11 +539,15 @@ export async function runWhazingTurnTail(
       )
       .catch(() => {});
     if (dir.action === "silent") return { reply: null };
+    // templateMessage is operator-configured and can be left blank — fall back to a generic
+    // message rather than `undefined` (which used to reach deliverReply and crash the turn,
+    // silently stranding the customer instead of the guardrail's intended reply).
     return {
       reply:
-        dir.action === "generated"
+        (dir.action === "generated"
           ? (verdict.suggestedReply ?? dir.templateMessage)
-          : dir.templateMessage,
+          : dir.templateMessage) ??
+        "Desculpe, não consigo continuar com isso agora. Nossa equipe vai dar continuidade por aqui.",
     };
   };
 
@@ -482,7 +555,6 @@ export async function runWhazingTurnTail(
   if (inGuard) {
     if (inGuard.reply === null) return "blocked";
     await client.sendMessage(ticketId, inGuard.reply);
-    markBotSent(instanceId, ticketId);
     return "posted";
   }
 
@@ -546,6 +618,7 @@ export async function runWhazingTurnTail(
   const checkpointer = await getCheckpointer();
   const graph = await buildModelAndGraph(loaded, tools, {
     checkpointer,
+    tenantId,
     onToolLimit: ({ maxToolCalls, toolCalls }) =>
       emitFlowEvent(flow, {
         stage: "generate",
@@ -646,7 +719,6 @@ export async function runWhazingTurnTail(
       loaded.splitConfig,
       undefined,
       flow,
-      () => markBotSent(instanceId, ticketId),
     );
     logger.info(
       "whazing agent replied: ticket=%s thread=%s len=%d",

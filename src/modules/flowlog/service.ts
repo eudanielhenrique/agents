@@ -123,6 +123,10 @@ export async function withFlowStage<T>(
     });
     return out;
   } catch (err) {
+    // The execution_logs row stores only the sanitized message (PII-free, per the module header) —
+    // the stack trace goes to the process logger instead, so a crash like the 2026-10
+    // `text.trim()` incident is pinpointable from `docker logs` without ever landing in the DB.
+    logger.error({ err, stage, turnId: ctx.turnId }, "flow stage failed");
     emitFlowEvent(ctx, {
       stage,
       level: meta.errorLevel ?? "error",

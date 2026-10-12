@@ -17,6 +17,7 @@ import {
   readWhazingIntakeConfig,
   type WhazingIntakeConfig,
 } from "./intake-settings";
+import { hasIgnoredTag, resolveIgnoredTags } from "./tags";
 import type { NormalizedWhazingEvent, WhazingTicketStatus } from "./types";
 
 function sysCtx(tenantId: bigint): TenantContext {
@@ -148,6 +149,22 @@ export async function runWhazingIntake(
   const { tenantId, instanceId, event } = params;
   const ticketId = event.ticketId;
   if (ticketId == null) return { routedTo: "skipped" };
+
+  const ignoredTags = await resolveIgnoredTags({
+    base,
+    tenantId,
+    instanceId,
+  });
+  if (
+    hasIgnoredTag(event.tags, ignoredTags) ||
+    hasIgnoredTag(event.contact?.tags, ignoredTags)
+  ) {
+    logger.info(
+      { ticketId, contactId: event.contact?.id, ignoredTags },
+      "whazing intake: ticket or contact has ignored tags — skipping intake",
+    );
+    return { routedTo: "skipped" };
+  }
 
   const resolved = await resolveWhazingIntake(base, tenantId, instanceId);
   if (!resolved) return { routedTo: "bot", botQueueId: null };

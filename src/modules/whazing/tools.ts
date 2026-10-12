@@ -10,7 +10,6 @@ import {
   roundDownToMinutes,
 } from "@/graph/time";
 import { CalculatorError, evaluateExpression } from "@/graph/tools/calculator";
-import { markBotSent } from "./bot-send-tracker";
 import type { WhazingClient, WhazingDynamicChoice } from "./client";
 import type { WhazingPixConfig } from "./payments";
 
@@ -65,7 +64,6 @@ function handoffToHumanTool(ctx: WhazingToolCtx) {
       if (customerMessage?.trim()) {
         try {
           await ctx.client.sendMessage(ctx.ticketId, customerMessage.trim());
-          markBotSent(ctx.instanceId, ctx.ticketId);
           ctx.onCustomerMessageSent?.();
         } catch (e) {
           logger.warn(
@@ -511,7 +509,6 @@ function sendButtonMessageTool(ctx: WhazingToolCtx) {
       await ctx.client.sendButtonMessage(ctx.ticketId, text, buttons, {
         headerImageUrl,
       });
-      markBotSent(ctx.instanceId, ctx.ticketId);
       return "Button message sent.";
     },
     {
@@ -572,7 +569,6 @@ function sendListMessageTool(ctx: WhazingToolCtx) {
         buttonText,
         sections,
       });
-      markBotSent(ctx.instanceId, ctx.ticketId);
       return "List message sent.";
     },
     {
@@ -642,7 +638,6 @@ function sendCarouselMessageTool(ctx: WhazingToolCtx) {
           choices: it.choices.map(toDynamicChoice),
         })),
       );
-      markBotSent(ctx.instanceId, ctx.ticketId);
       return "Carousel sent.";
     },
     {
@@ -682,7 +677,6 @@ function sendPixButtonTool(ctx: WhazingToolCtx) {
         return "PIX is not configured for this agent. Use handoff_to_human instead of inventing payment details.";
       }
       await ctx.client.sendPixButtonMessage(ctx.ticketId, ctx.pixConfig);
-      markBotSent(ctx.instanceId, ctx.ticketId);
       return "PIX key button sent.";
     },
     {
@@ -720,7 +714,6 @@ function requestPaymentTool(ctx: WhazingToolCtx) {
         itemName,
         ...ctx.pixConfig,
       });
-      markBotSent(ctx.instanceId, ctx.ticketId);
       return `Payment request for ${amount} sent.`;
     },
     {

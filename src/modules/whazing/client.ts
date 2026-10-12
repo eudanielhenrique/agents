@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import logger from "@/api/lib/logger";
 import { assertSafeOutboundUrl } from "@/lib/ssrf";
 import type { InboxReplyClient } from "@/lib/transport/inbox-client";
+import { markBotSent } from "./bot-send-tracker";
+import { extractTagValues } from "./tags";
 import type { WhazingTicketStatus } from "./types";
 
 // Daniel's own wrapper (agendamento-api), fixed — the SAME single self-hosted Whazing install
@@ -94,6 +96,10 @@ export class WhazingApiError extends Error {
 export interface WhazingClientConfig {
   baseUrl: string;
   apiKey: string;
+  // Needed only to key bot-send-tracker.ts's echo guard (markBotSent, below) — every method that
+  // posts a customer-visible message calls it after a successful send, so no caller can forget to
+  // (the bug class fixed 2026-08-18/2026-09, see bot-send-tracker.ts).
+  instanceId: bigint;
 }
 
 export class WhazingClient implements InboxReplyClient {
@@ -134,12 +140,14 @@ export class WhazingClient implements InboxReplyClient {
 
   // Send text message to an existing ticket.
   // Whazing uses "body" (not "text") and requires an externalKey for idempotency.
-  sendMessage(ticketId: number, text: string): Promise<unknown> {
-    return this.request("POST", "", {
+  async sendMessage(ticketId: number, text: string): Promise<unknown> {
+    const res = await this.request("POST", "", {
       body: text,
       ticketId,
       externalKey: randomUUID(),
     });
+    markBotSent(this.config.instanceId, ticketId);
+    return res;
   }
 
   // Send text to a raw phone number, no existing ticket required (Whazing opens/reuses one).
@@ -209,6 +217,7 @@ export class WhazingClient implements InboxReplyClient {
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!res.ok) throw new WhazingApiError(res.status, `POST ${url} (audio)`);
+    markBotSent(this.config.instanceId, ticketId);
     return null;
   }
 
@@ -275,16 +284,27 @@ export class WhazingClient implements InboxReplyClient {
     id: number;
     name: string | null;
     extraInfo: Array<{ name: string; value: string }>;
+    tags: string[];
+    disableBot: boolean;
   } | null> {
     try {
       const res = (await this.request("POST", "/contact", {
         contactId,
-      })) as {
-        id: number;
-        name: string | null;
-        extraInfo?: Array<{ name: string; value: string }> | null;
+      })) as Record<string, unknown>;
+      const c =
+        res && typeof res.contact === "object" && res.contact !== null
+          ? (res.contact as Record<string, unknown>)
+          : res;
+      if (!c) return null;
+      return {
+        id: (c.id as number) ?? contactId,
+        name: (c.name as string) ?? null,
+        extraInfo: Array.isArray(c.extraInfo)
+          ? (c.extraInfo as Array<{ name: string; value: string }>)
+          : [],
+        tags: extractTagValues(c.tags),
+        disableBot: Boolean(c.disableBot || c.ignore),
       };
-      return { id: res.id, name: res.name, extraInfo: res.extraInfo ?? [] };
     } catch (e) {
       if (e instanceof WhazingApiError && e.status === 404) return null;
       throw e;
@@ -393,13 +413,13 @@ export class WhazingClient implements InboxReplyClient {
   // ── API Plus — interactive messages ──
 
   // Up to 3 quick-reply buttons, optional image header.
-  sendButtonMessage(
+  async sendButtonMessage(
     ticketId: number,
     bodyText: string,
     buttons: WhazingReplyButton[],
     opts?: { headerImageUrl?: string },
   ): Promise<unknown> {
-    return this.request("POST", "/apiplus", {
+    const res = await this.request("POST", "/apiplus", {
       ticketId,
       contents: {
         type: "button",
@@ -410,10 +430,12 @@ export class WhazingClient implements InboxReplyClient {
           : {}),
       },
     });
+    markBotSent(this.config.instanceId, ticketId);
+    return res;
   }
 
   // Sectioned picklist opened via a button (WhatsApp "list message").
-  sendListMessage(
+  async sendListMessage(
     ticketId: number,
     params: {
       headerText?: string;
@@ -422,7 +444,7 @@ export class WhazingClient implements InboxReplyClient {
       sections: WhazingListSection[];
     },
   ): Promise<unknown> {
-    return this.request("POST", "/apiplus", {
+    const res = await this.request("POST", "/apiplus", {
       ticketId,
       contents: {
         type: "list",
@@ -433,10 +455,12 @@ export class WhazingClient implements InboxReplyClient {
         action: { sections: params.sections, button: params.buttonText },
       },
     });
+    markBotSent(this.config.instanceId, ticketId);
+    return res;
   }
 
   // Single link button ("cta_url"), optional text or image header.
-  sendCtaUrlMessage(
+  async sendCtaUrlMessage(
     ticketId: number,
     params: {
       bodyText: string;
@@ -452,7 +476,7 @@ export class WhazingClient implements InboxReplyClient {
       : params.headerText
         ? { type: "text", text: params.headerText }
         : undefined;
-    return this.request("POST", "/apiplus", {
+    const res = await this.request("POST", "/apiplus", {
       ticketId,
       contents: {
         type: "cta_url",
@@ -465,14 +489,16 @@ export class WhazingClient implements InboxReplyClient {
         },
       },
     });
+    markBotSent(this.config.instanceId, ticketId);
+    return res;
   }
 
   // Prompts the customer to share their location.
-  sendLocationRequestMessage(
+  async sendLocationRequestMessage(
     ticketId: number,
     bodyText: string,
   ): Promise<unknown> {
-    return this.request("POST", "/apiplus", {
+    const res = await this.request("POST", "/apiplus", {
       ticketId,
       contents: {
         type: "location_request_message",
@@ -480,10 +506,12 @@ export class WhazingClient implements InboxReplyClient {
         action: { name: "send_location" },
       },
     });
+    markBotSent(this.config.instanceId, ticketId);
+    return res;
   }
 
   // Richer button message: mixed reply/copy/call/url choices, optional image header.
-  sendDynamicButtonMessage(
+  async sendDynamicButtonMessage(
     ticketId: number,
     params: {
       text: string;
@@ -492,7 +520,7 @@ export class WhazingClient implements InboxReplyClient {
       imageUrl?: string;
     },
   ): Promise<unknown> {
-    return this.request("POST", "/apiplus", {
+    const res = await this.request("POST", "/apiplus", {
       ticketId,
       contents: {
         type: "dinamic_button",
@@ -502,18 +530,22 @@ export class WhazingClient implements InboxReplyClient {
         choices: params.choices,
       },
     });
+    markBotSent(this.config.instanceId, ticketId);
+    return res;
   }
 
   // Multi-card carousel, each card with its own image + reply/copy/call/url choices.
-  sendCarouselMessage(
+  async sendCarouselMessage(
     ticketId: number,
     text: string,
     items: WhazingCarouselItem[],
   ): Promise<unknown> {
-    return this.request("POST", "/apiplus", {
+    const res = await this.request("POST", "/apiplus", {
       ticketId,
       contents: { type: "carousel_button", text, items },
     });
+    markBotSent(this.config.instanceId, ticketId);
+    return res;
   }
 
   // ── PIX ──
@@ -521,19 +553,21 @@ export class WhazingClient implements InboxReplyClient {
   // "Copy PIX key" button. pixKey/pixName/pixType should be operator-configured, never model-chosen
   // (see WhazingToolCtx.pixConfig / send_pix_button in tools.ts) — sending the wrong key means the
   // customer pays the wrong recipient.
-  sendPixButtonMessage(
+  async sendPixButtonMessage(
     ticketId: number,
     params: { pixKey: string; pixName: string; pixType: WhazingPixType },
   ): Promise<unknown> {
-    return this.request("POST", "/pixbutton", {
+    const res = await this.request("POST", "/pixbutton", {
       ticketId,
       contents: { type: "pixbutton", ...params },
     });
+    markBotSent(this.config.instanceId, ticketId);
+    return res;
   }
 
   // Payment-request card: amount is required; either PIX fields or a pre-approved paymentLink.
   // boletoCode/itemName are supported by the API but not yet surfaced by any tool (MVP).
-  sendPaymentRequestMessage(
+  async sendPaymentRequestMessage(
     ticketId: number,
     params: {
       amount: number;
@@ -548,10 +582,12 @@ export class WhazingClient implements InboxReplyClient {
       boletoCode?: string;
     },
   ): Promise<unknown> {
-    return this.request("POST", "/requestpayment", {
+    const res = await this.request("POST", "/requestpayment", {
       ticketId,
       contents: { type: "requestpayment", ...params },
     });
+    markBotSent(this.config.instanceId, ticketId);
+    return res;
   }
 }
 

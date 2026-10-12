@@ -4,16 +4,34 @@ import { Semaphore } from "@/lib/semaphore";
 
 // Policy point for every agent model call: the LLM round-trip in the LangGraph agent node
 // (graph.ts), the guardrail classifier and the opt-in TTS-normalize call. It caps how many calls are
-// in flight across ALL entrypoints (debounce/webhook/nudge/playground) so a burst does not hammer
-// the provider, and it recovers the one provider fault LangChain cannot see. Singleton on
-// globalThis so `bun --hot` reloads reuse one instance (same pattern as worker.ts / checkpointer.ts).
+// in flight so a burst does not hammer the provider, and it recovers the one provider fault
+// LangChain cannot see. One semaphore PER TENANT (not a single global pool): a tenant stuck in a
+// retry storm or traffic spike only exhausts its own slots, never another tenant's. Callers that
+// cannot cheaply thread a tenantId through yet (guardrail, TTS-normalize) fall back to a shared
+// bucket — same behavior they always had, not a regression.
+// ponytail: guardrail/TTS-normalize still share one bucket; give them their own tenant key too
+// if a tenant's guardrail/TTS traffic alone turns out to matter.
+// Singleton on globalThis so `bun --hot` reloads reuse the same instances (same pattern as
+// worker.ts / checkpointer.ts).
 
-const KEY = Symbol.for("fazerai.model.semaphore");
+const KEY = Symbol.for("fazerai.model.semaphores");
+const SHARED_BUCKET = "shared";
 
-function sem(): Semaphore {
-  const g = globalThis as unknown as Record<symbol, Semaphore>;
-  g[KEY] ??= new Semaphore(config.agent.modelConcurrency);
+function semaphores(): Map<string, Semaphore> {
+  const g = globalThis as unknown as Record<symbol, Map<string, Semaphore>>;
+  g[KEY] ??= new Map();
   return g[KEY];
+}
+
+function sem(tenantId?: bigint | string): Semaphore {
+  const key = tenantId === undefined ? SHARED_BUCKET : String(tenantId);
+  const pools = semaphores();
+  let s = pools.get(key);
+  if (!s) {
+    s = new Semaphore(config.agent.modelConcurrency);
+    pools.set(key, s);
+  }
+  return s;
 }
 
 // NOTE: short on purpose — a customer is waiting on the other end of this call.
@@ -63,8 +81,12 @@ export async function runModelCall<T>(
   fn: () => Promise<T>,
   // Fired when a call is retried, so the runtime can leave a warn on the turn's trail. Best-effort.
   onRetry?: (info: { attempt: number; error: unknown }) => void,
+  // The tenant this call is billed to — isolates its semaphore slots from every other tenant's.
+  // Omitted by callers that do not have one cheaply in scope yet; they share one pool, exactly as
+  // every caller did before per-tenant isolation existed.
+  tenantId?: bigint | string,
 ): Promise<T> {
-  return sem().run(async () => {
+  return sem(tenantId).run(async () => {
     try {
       return await fn();
     } catch (err) {

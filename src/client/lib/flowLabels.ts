@@ -22,6 +22,8 @@ export function flowStageLabel(stage: string, t: TFunction): string {
       return t("logs.stage.split", "Delivery");
     case "handoff":
       return t("logs.stage.handoff", "Handoff");
+    case "webhook":
+      return t("logs.stage.webhook", "Webhook delivery");
     default:
       return stage;
   }

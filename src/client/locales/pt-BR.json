@@ -219,6 +219,10 @@
     "signupFailed": "Falha ao cadastrar"
   },
   "branding": {
+    "cropApply": "Aplicar",
+    "cropFaviconTitle": "Ajustar favicon",
+    "cropHint": "Arraste para selecionar a área que deseja manter.",
+    "cropLogoTitle": "Ajustar logo",
     "subtitle": "Personalize a aparência global do app (nome, cores, logo, favicon).",
     "title": "Identidade visual"
   },
@@ -1038,20 +1042,14 @@
     "visionPromptHint": "Como o modelo deve ler o arquivo.",
     "visionPromptReset": "Restaurar padrão",
     "visionProvider": "Provedor",
-    "whazingCampaignDescription": "Etiqueta e avisa um lead vindo de campanha.",
-    "whazingCampaignNotifyMessage": "Modelo da mensagem de aviso",
-    "whazingCampaignNotifyMessageHint": "Enviada pro telefone de aviso. {{ctwaClid}} é substituído pelo id do clique do anúncio quando presente.",
-    "whazingCampaignNotifyPhone": "Telefone de aviso",
-    "whazingCampaignNotifyPhoneHint": "Número interno avisado sobre um lead de campanha. Vazio = sem aviso.",
-    "whazingCampaignSectionHint": "Só Whazing. Etiqueta e avisa um lead vindo de campanha (anúncios clique-para-WhatsApp do Meta/Instagram). Independente do roteamento por histórico acima — a maioria dos clientes que roda anúncio quer isso ligado. Desligado por padrão.",
-    "whazingCampaignTagId": "ID da etiqueta de lead de campanha",
-    "whazingCampaignTagIdHint": "ID da etiqueta do Whazing aplicada ao contato cuja mensagem carrega um sinal de anúncio clique-para-WhatsApp (ctwa_ad). Vazio = sem etiqueta.",
-    "whazingCampaignTitle": "Etiqueta de campanha do Whazing",
-    "whazingEscalateQueueId": "ID da fila de escalonamento",
-    "whazingEscalateQueueIdHint": "ID da fila do Whazing para onde o ticket vai quando o contato já tem histórico, já foi respondido, ou um humano acabou de assumir. Encontre na lista de filas do seu painel Whazing — o Whazing não tem API pra listar filas, então é digitado à mão.",
-    "whazingHistoryRoutingDescription": "Move um ticket novo pra fila de escalonamento quando o contato já tem histórico ou já foi respondido.",
-    "whazingHistoryRoutingSectionHint": "Só Whazing. Roteia um ticket novo pra uma fila humana quando o contato já tem uma conversa em andamento ou já foi respondido. Independente da etiqueta de campanha abaixo — alguns clientes querem isso, outros não. Desligado por padrão.",
-    "whazingHistoryRoutingTitle": "Roteamento por histórico do Whazing",
+    "whazingChannels": {
+      "desc": "Conecte este agente às filas do Whazing que ele deve atender. As mudanças aplicam imediatamente.",
+      "emptyDesc": "Adicione uma fila a uma instância Whazing primeiro.",
+      "goToWhazing": "Ir para o Whazing",
+      "noInstance": "Nenhum Whazing conectado",
+      "noInstanceDesc": "Conecte uma instância Whazing em Whazing, depois volte aqui para vincular este agente às suas filas.",
+      "title": "Filas"
+    },
     "whazingQueueId": "ID da fila Whazing",
     "whazingQueueIdHint": "Número da fila no Whazing para onde o ticket será roteado após a transferência. Encontre na lista de filas do seu painel Whazing."
   },
@@ -1097,6 +1095,10 @@
       "ASAAS": {
         "description": "Pagamentos no Brasil. Gera links de pagamento e cobranças PIX; quando uma cobrança é paga, o agente é acordado na conversa que a gerou.",
         "label": "Asaas"
+      },
+      "DELIVERY": {
+        "description": "Cálculo inteligente de rotas e frete para entregas (cotação oficial Uber Direct e modo gratuito OpenStreetMap / OSRM).",
+        "label": "Entregas & Frete (Uber / OSRM)"
       },
       "GENERIC": {
         "label": "Webhook genérico"
@@ -1178,6 +1180,24 @@
     "deleteError": "Não foi possível excluir.",
     "deleteMessage": "Excluir \"{{name}}\"?",
     "deleteTitle": "Excluir integração",
+    "delivery": {
+      "baseFee": "Taxa Base (R$)",
+      "cityDefault": "Cidade / Estado Padrão",
+      "cityDefaultHint": "Usado para refinar a busca quando o cliente só informa o bairro.",
+      "formulaTitle": "Parâmetros do Frete Gratuito / Estimado",
+      "minimumFee": "Valor Mínimo (R$)",
+      "modeFreeOnly": "100% Gratuito (OpenStreetMap + OSRM)",
+      "modeHybrid": "Híbrido (Uber Direct + Fallback Gratuito OSRM)",
+      "modeUberOnly": "Apenas Uber Direct (Oficial)",
+      "originAddress": "Endereço da Loja / Ateliê (Origem Padrão)",
+      "originAddressHint": "Endereço fixo de onde saem os produtos (ex: Av. dos Italianos, 1406 Loja A, Rocha Miranda, Rio de Janeiro - RJ).",
+      "pricePerKm": "Por KM (R$)",
+      "pricePerMinute": "Por Minuto (R$)",
+      "pricingMode": "Modo de Cotação",
+      "pricingModeHint": "Híbrido tenta Uber Direct oficial e cai para o Gratuito em caso de erro.",
+      "uberCustomerId": "Uber Customer ID (Opcional)",
+      "uberCustomerIdHint": "Necessário apenas se sua conta Uber Direct exigir o ID de cliente comercial."
+    },
     "editTitle": "Editar integração",
     "emptyDesc": "Ative uma do catálogo (ex.: Asaas, Google Calendar).",
     "emptyTitle": "Nenhuma integração ainda",
@@ -1400,7 +1420,8 @@
       "split": "Entrega",
       "stt": "Transcrição",
       "tool": "Chamada de ferramenta",
-      "tts": "Síntese de áudio"
+      "tts": "Síntese de áudio",
+      "webhook": "Entrega de webhook"
     },
     "steps": "{{n}} etapas",
     "subtitle": "Fluxo de execução passo a passo de cada turno do agente: transcrição, geração, áudio, entrega e transferências.",
@@ -1862,14 +1883,21 @@
     "title": "Contatar suporte"
   },
   "tenant": {
+    "adminEmail": "E-mail do primeiro admin (opcional)",
+    "adminEmailHint": "Se informado, um link de convite para o admin do tenant é gerado.",
     "create": "Criar tenant",
+    "createFailed": "Não foi possível criar o tenant",
     "demo": "Demo",
+    "edit": "Editar tenant",
     "label": "Tenant",
     "name": "Nome",
     "none": "Nenhum tenant ainda.",
     "select": "Selecionar tenant",
     "slug": "Slug",
-    "switcher": "Trocar de tenant"
+    "slugHint": "Letras minúsculas, números e hifens.",
+    "slugInvalid": "Use letras minúsculas, números e hifens simples (sem hifen no início/fim).",
+    "switcher": "Trocar de tenant",
+    "updateFailed": "Não foi possível atualizar o tenant"
   },
   "testMode": {
     "badge": {

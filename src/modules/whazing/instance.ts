@@ -29,7 +29,7 @@ export async function loadWhazingClient(
   if (row.disconnectedAt !== null)
     throw new Error(`WhazingInstance ${instanceId} is disconnected`);
   const apiKey = decryptJson<string>(row.apiKey);
-  return createWhazingClient({ baseUrl: row.baseUrl, apiKey });
+  return createWhazingClient({ baseUrl: row.baseUrl, apiKey, instanceId });
 }
 
 export interface ResolvedWhazingInstance {

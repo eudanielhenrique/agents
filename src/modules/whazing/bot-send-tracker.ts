@@ -8,6 +8,14 @@
 // This tracks OUR OWN sends instead — a signal we control completely, no dependency on how
 // Whazing chooses to label the echo. In-memory, single-process: matches the same invariant as
 // graph/inflight.ts (single-replica; a second replica would need a shared store).
+//
+// markBotSent is called from EXACTLY ONE place — inside every send method of WhazingClient
+// (client.ts) — not from each tool/caller that triggers a send. Two real incidents (2026-08-27
+// ticket 12084, split delivery only marking once per reply instead of once per balloon; 2026-09-xx
+// ticket 15985, a signature change left some call sites passing the old 2-arg form) were both a
+// caller forgetting to mark after adding/changing a send path. Marking inside the client itself
+// means there is no second call site left to forget — any new tool that sends through the client
+// is covered automatically.
 
 const BOT_SEND_WINDOW_MS = 60_000;
 

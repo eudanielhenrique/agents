@@ -4,6 +4,8 @@
 // WhazingInbox.whazingQueueId, the same row that maps this agent to a queue. This reader is the
 // single source of defaults + clamping for the `agent.settings.whazingIntake` block.
 
+import { extractTagValues } from "./tags";
+
 export interface WhazingIntakeConfig {
   // Reroutes a brand-new ticket to escalateQueueId by prior history / already-answered. Independent
   // of campaignEnabled — some clients want history-based routing, some don't, and both are common
@@ -23,6 +25,8 @@ export interface WhazingIntakeConfig {
   campaignNotifyPhone: string | null;
   // Template sent to campaignNotifyPhone. {{ctwaClid}} is interpolated when present.
   campaignNotifyMessage: string;
+  // Tags that should cause the bot to ignore the contact / ticket entirely.
+  ignoredTags: string[];
 }
 
 export const WHAZING_INTAKE_DEFAULTS: WhazingIntakeConfig = {
@@ -35,6 +39,7 @@ export const WHAZING_INTAKE_DEFAULTS: WhazingIntakeConfig = {
   campaignNotifyPhone: null,
   campaignNotifyMessage:
     "Lead de campanha identificado.\n\nctwaClid: {{ctwaClid}}",
+  ignoredTags: [],
 };
 
 function bool(v: unknown, fallback: boolean): boolean {
@@ -89,6 +94,12 @@ export function readWhazingIntakeConfig(
     campaignNotifyMessage: str(
       bag.campaignNotifyMessage,
       D.campaignNotifyMessage,
+    ),
+    ignoredTags: extractTagValues(
+      bag.ignoredTags ??
+        bag.excludedTags ??
+        rec.ignoredTags ??
+        rec.excludedTags,
     ),
   };
 }

@@ -1097,6 +1097,10 @@ export interface GraphBuildDeps {
   // Fired when the hard tool-call limit forces a no-tools answer (runtime emits a flow warn).
   onToolLimit?: (info: { maxToolCalls: number; toolCalls: number }) => void;
   onModelRetry?: (info: { attempt: number; error: unknown }) => void;
+  // Isolates this turn's model-call semaphore slots from every other tenant's (see model-limit).
+  // Not on AgentConfig (loadAgentConfig's return never carries the caller's own tenantId), so every
+  // caller threads the tenantId it already has in scope.
+  tenantId?: bigint;
 }
 
 // Per-turn facts that are NOT part of the agent's saved config and are only known once the turn is
@@ -1144,5 +1148,6 @@ export async function buildModelAndGraph(
     maxToolCalls: cfg.maxToolCalls,
     onToolLimit: deps.onToolLimit,
     onModelRetry: deps.onModelRetry,
+    tenantId: deps.tenantId,
   });
 }

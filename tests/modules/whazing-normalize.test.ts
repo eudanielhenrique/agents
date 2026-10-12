@@ -647,3 +647,92 @@ describe("renderWhazingMessage campaign ad context", () => {
     expect(rendered).toBe("oi");
   });
 });
+
+describe("renderWhazingMessage image/document extraction", () => {
+  function eventWithAttachment(
+    mediaType: string,
+    fileName: string | null = null,
+  ) {
+    return {
+      event: "message_received" as const,
+      ticketId: 1,
+      queueId: null,
+      assignedUserId: null,
+      status: "pending" as const,
+      sendType: null,
+      campaignSignal: null,
+      contact: null,
+      message: {
+        id: "m1",
+        body: null,
+        fromMe: false,
+        isAutomation: false,
+        attachments: [
+          {
+            id: "a1",
+            mediaType,
+            mediaUrl: "https://example.com/a1.jpg",
+            mimeType: null,
+            fileName,
+          },
+        ],
+        timestamp: null,
+      },
+    };
+  }
+
+  test("falls back to the bare marker when no extraction was produced (today's behavior)", () => {
+    const rendered = renderWhazingMessage(
+      eventWithAttachment("image"),
+      null,
+      null,
+    );
+    expect(rendered).toBe(
+      "<mensagem de imagem não pôde ser lida; peça que o cliente descreva por texto>",
+    );
+  });
+
+  test("inlines the vision description when extraction succeeded — this is the fix: the agent used to get a content-free marker for every photo (ad screenshots, cake references) and had nothing to react to", () => {
+    const rendered = renderWhazingMessage(eventWithAttachment("image"), null, {
+      kind: "image",
+      text: "Captura de tela de anúncio do Instagram com foto de bolo decorado e texto 'Converse conosco'.",
+    });
+    expect(rendered).toBe(
+      "<mensagem-de-imagem>Captura de tela de anúncio do Instagram com foto de bolo decorado e texto 'Converse conosco'.</mensagem-de-imagem>",
+    );
+  });
+
+  test("sticker attachments go through the same image path", () => {
+    const rendered = renderWhazingMessage(
+      eventWithAttachment("sticker"),
+      null,
+      {
+        kind: "image",
+        text: "Figurinha de um coração vermelho.",
+      },
+    );
+    expect(rendered).toBe(
+      "<mensagem-de-imagem>Figurinha de um coração vermelho.</mensagem-de-imagem>",
+    );
+  });
+
+  test("inlines document extraction (e.g. a PDF) when available", () => {
+    const rendered = renderWhazingMessage(
+      eventWithAttachment("document", "orcamento.pdf"),
+      null,
+      { kind: "document", text: "Orçamento de bolo cenográfico — R$ 350,00." },
+    );
+    expect(rendered).toBe(
+      "<mensagem-de-arquivo>Orçamento de bolo cenográfico — R$ 350,00.</mensagem-de-arquivo>",
+    );
+  });
+
+  test("falls back to the named-file marker when a document has no extraction", () => {
+    const rendered = renderWhazingMessage(
+      eventWithAttachment("document", "orcamento.pdf"),
+      null,
+      null,
+    );
+    expect(rendered).toBe('<mensagem-de-arquivo nome="orcamento.pdf" />');
+  });
+});

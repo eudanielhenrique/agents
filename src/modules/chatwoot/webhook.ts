@@ -1452,8 +1452,10 @@ export async function processChatwootDelivery(
     });
   }
 
-  // tx2: mark processed. NOTE: a crash between tx1 and tx2 strands the row in PROCESSING; a
-  // reaper (stale PROCESSING→PENDING) lands with the durable payload store.
+  // tx2: mark processed. A crash between tx1 and tx2 (or any exception raised anywhere above)
+  // strands the row in PROCESSING — the caller's catch calls markChatwootDeliveryFailed below;
+  // there is no periodic reaper, and none is needed for the exception path (the catch always
+  // runs before the process could exit cleanly).
   await runScopedOn(base, sysCtx(params.tenantId), (db) =>
     db.chatwootWebhookDelivery.update({
       where: { id: params.deliveryRowId },
@@ -1461,4 +1463,25 @@ export async function processChatwootDelivery(
     }),
   );
   return "processed";
+}
+
+// Called from the controller's detached `.catch()`. The row was previously left in PROCESSING
+// forever on any exception from processChatwootDelivery — a customer message silently vanished
+// with no trace. Marked FAILED now so it is visible and alertable; best-effort (never let a
+// bookkeeping failure mask the original error that got us here).
+export async function markChatwootDeliveryFailed(
+  tenantId: bigint,
+  deliveryRowId: bigint,
+  base: PrismaClient = basePrisma,
+): Promise<void> {
+  try {
+    await runScopedOn(base, sysCtx(tenantId), (db) =>
+      db.chatwootWebhookDelivery.update({
+        where: { id: deliveryRowId },
+        data: { status: "FAILED" },
+      }),
+    );
+  } catch (err) {
+    logger.error({ err, deliveryRowId }, "chatwoot: markFailed itself failed");
+  }
 }

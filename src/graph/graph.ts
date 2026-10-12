@@ -9,6 +9,7 @@ import {
 } from "@langchain/langgraph";
 import { ToolNode, toolsCondition } from "@langchain/langgraph/prebuilt";
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint";
+import config from "@/config";
 import { runModelCall } from "@/graph/model-limit";
 
 // Minimal functional supervisor: an agent node over the persisted message history, with an
@@ -34,6 +35,9 @@ export interface BuildAgentGraphParams {
   // model-limit). Same purpose as onToolLimit: without it a recovered turn looks like a clean one
   // and the fault rate stays invisible.
   onModelRetry?: (info: { attempt: number; error: unknown }) => void;
+  // Isolates this agent's model-call semaphore slots from every other tenant's (see model-limit).
+  // Omitted only by callers with no tenant yet (there are none left on the main turn path).
+  tenantId?: bigint | string;
 }
 
 const DEFAULT_MAX_TOOL_CALLS = 10;
@@ -58,6 +62,7 @@ export function buildAgentGraph({
   maxToolCalls,
   onToolLimit,
   onModelRetry,
+  tenantId,
 }: BuildAgentGraphParams) {
   const hasTools = !!tools && tools.length > 0;
   const llm = hasTools ? (model.bindTools?.(tools) ?? model) : model;
@@ -88,11 +93,16 @@ export function buildAgentGraph({
 
     const response = await runModelCall(
       () =>
-        (hardLimit ? model : llm).invoke([
-          new SystemMessage(prompt),
-          ...history,
-        ]),
+        (hardLimit ? model : llm).invoke(
+          [new SystemMessage(prompt), ...history],
+          // No provider here sets its own deadline (createChatModel does not pass one): a
+          // provider that accepts the connection and never answers held the turn, and the
+          // semaphore slot behind it, open indefinitely. Same mechanism guardrails/analyze.ts
+          // already uses for its own call.
+          { signal: AbortSignal.timeout(config.agent.modelTimeoutMs) },
+        ),
       onModelRetry,
+      tenantId,
     );
     return { messages: [response] };
   };

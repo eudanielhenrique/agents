@@ -277,6 +277,7 @@ export async function runLoadedTurn(
     {
       makeModel: params.deps?.makeModel,
       checkpointer: params.deps?.checkpointer,
+      tenantId,
       // Hard tool-call limit reached → surface a warn in the turn trail/Logs so the operator sees the
       // agent was forced to answer (vs silently looping or erroring with GraphRecursionError).
       onToolLimit: ({ maxToolCalls, toolCalls }) =>
@@ -451,11 +452,15 @@ export async function runLoadedTurn(
       )
       .catch(() => {});
     if (dir.action === "silent") return { reply: null };
+    // templateMessage is operator-configured and can be left blank — fall back to a generic
+    // message rather than `undefined` (which used to reach deliverReply and crash the turn,
+    // silently stranding the customer instead of the guardrail's intended reply).
     return {
       reply:
-        dir.action === "generated"
+        (dir.action === "generated"
           ? (verdict.suggestedReply ?? dir.templateMessage)
-          : dir.templateMessage,
+          : dir.templateMessage) ??
+        "Desculpe, não consigo continuar com isso agora. Nossa equipe vai dar continuidade por aqui.",
     };
   };
   // How many balloons the (text) reply was delivered as, surfaced on `finished` so the UI can hold a

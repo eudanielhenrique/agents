@@ -14,6 +14,7 @@ export const FLOW_STAGES = [
   "tts", // audio-reply synthesis
   "split", // humanized balloon delivery
   "handoff", // human takeover detected before posting
+  "webhook", // inbound webhook delivery processing failed (ledger row left FAILED/DEAD)
 ] as const;
 export type FlowStage = (typeof FLOW_STAGES)[number];
 

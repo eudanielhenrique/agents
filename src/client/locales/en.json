@@ -219,6 +219,10 @@
     "signupFailed": "Signup failed"
   },
   "branding": {
+    "cropApply": "Apply",
+    "cropFaviconTitle": "Adjust favicon",
+    "cropHint": "Drag to select the area to keep.",
+    "cropLogoTitle": "Adjust logo",
     "subtitle": "Customize the app's global appearance (name, colors, logo, favicon).",
     "title": "Branding"
   },
@@ -1035,20 +1039,14 @@
     "visionPromptHint": "How the model should read the file.",
     "visionPromptReset": "Restore default",
     "visionProvider": "Provider",
-    "whazingCampaignDescription": "Tag + notify a campaign-sourced lead.",
-    "whazingCampaignNotifyMessage": "Notify message template",
-    "whazingCampaignNotifyMessageHint": "Sent to the notify phone. {{ctwaClid}} is replaced with the ad click id when present.",
-    "whazingCampaignNotifyPhone": "Notify phone",
-    "whazingCampaignNotifyPhoneHint": "Internal number notified about a campaign lead. Empty = no notification.",
-    "whazingCampaignSectionHint": "Whazing-only. Tags and notifies a campaign-sourced lead (Meta/Instagram click-to-WhatsApp ads). Independent of history routing above — most clients running ads want this on. Off by default.",
-    "whazingCampaignTagId": "Campaign lead tag ID",
-    "whazingCampaignTagIdHint": "Whazing tag ID applied to a contact whose message carries a click-to-WhatsApp-ad (ctwa_ad) signal. Empty = no tagging.",
-    "whazingCampaignTitle": "Whazing campaign tagging",
-    "whazingEscalateQueueId": "Escalate queue ID",
-    "whazingEscalateQueueIdHint": "Whazing queue ID a ticket moves to once the contact has prior history, was already answered, or a human just took over. Find it in your Whazing dashboard (queue list) — Whazing has no API to list queues, so this is typed by hand.",
-    "whazingHistoryRoutingDescription": "Move a new ticket to the escalate queue when the contact has prior history or was already answered.",
-    "whazingHistoryRoutingSectionHint": "Whazing-only. Routes a brand new ticket to a human queue when the contact already has an ongoing conversation or was already answered. Independent of campaign tagging below — some clients want this, some don't. Off by default.",
-    "whazingHistoryRoutingTitle": "Whazing history routing",
+    "whazingChannels": {
+      "desc": "Connect this agent to the Whazing queues it should answer. Changes apply immediately.",
+      "emptyDesc": "Add a queue to a Whazing instance first.",
+      "goToWhazing": "Go to Whazing",
+      "noInstance": "No Whazing connected",
+      "noInstanceDesc": "Connect a Whazing instance under Whazing, then come back to bind this agent to its queues.",
+      "title": "Queues"
+    },
     "whazingQueueId": "Whazing queue ID",
     "whazingQueueIdHint": "Whazing queue number to route the ticket to after handoff. Find it in your Whazing dashboard (queue list)."
   },
@@ -1094,6 +1092,10 @@
       "ASAAS": {
         "description": "Brazilian payments. Create payment links and PIX charges; when a charge is paid, the agent is woken on the conversation that generated it.",
         "label": "Asaas"
+      },
+      "DELIVERY": {
+        "description": "Cálculo inteligente de rotas e frete para entregas (cotação oficial Uber Direct e modo gratuito OpenStreetMap / OSRM).",
+        "label": "Entregas & Frete (Uber / OSRM)"
       },
       "GENERIC": {
         "label": "Generic webhook"
@@ -1175,6 +1177,24 @@
     "deleteError": "Could not delete.",
     "deleteMessage": "Delete \"{{name}}\"?",
     "deleteTitle": "Delete integration",
+    "delivery": {
+      "baseFee": "Taxa Base (R$)",
+      "cityDefault": "Cidade / Estado Padrão",
+      "cityDefaultHint": "Usado para refinar a busca quando o cliente só informa o bairro.",
+      "formulaTitle": "Parâmetros do Frete Gratuito / Estimado",
+      "minimumFee": "Valor Mínimo (R$)",
+      "modeFreeOnly": "100% Gratuito (OpenStreetMap + OSRM)",
+      "modeHybrid": "Híbrido (Uber Direct + Fallback Gratuito OSRM)",
+      "modeUberOnly": "Apenas Uber Direct (Oficial)",
+      "originAddress": "Endereço da Loja / Ateliê (Origem Padrão)",
+      "originAddressHint": "Endereço fixo de onde saem os produtos (ex: Av. dos Italianos, 1406 Loja A, Rocha Miranda, Rio de Janeiro - RJ).",
+      "pricePerKm": "Por KM (R$)",
+      "pricePerMinute": "Por Minuto (R$)",
+      "pricingMode": "Modo de Cotação",
+      "pricingModeHint": "Híbrido tenta Uber Direct oficial e cai para o Gratuito em caso de erro.",
+      "uberCustomerId": "Uber Customer ID (Opcional)",
+      "uberCustomerIdHint": "Necessário apenas se sua conta Uber Direct exigir o ID de cliente comercial."
+    },
     "editTitle": "Edit integration",
     "emptyDesc": "Activate one from the catalog (e.g. Asaas, Google Calendar).",
     "emptyTitle": "No integrations yet",
@@ -1395,7 +1415,8 @@
       "split": "Delivery",
       "stt": "Transcription",
       "tool": "Tool call",
-      "tts": "Audio synthesis"
+      "tts": "Audio synthesis",
+      "webhook": "Webhook delivery"
     },
     "steps": "{{n}} steps",
     "subtitle": "Per-step execution flow for each agent turn: transcription, generation, audio, delivery and handoffs.",
@@ -1856,14 +1877,21 @@
     "title": "Contact support"
   },
   "tenant": {
+    "adminEmail": "First admin email (optional)",
+    "adminEmailHint": "If set, an invitation link for the tenant admin is generated.",
     "create": "Create tenant",
+    "createFailed": "Could not create the tenant",
     "demo": "Demo",
+    "edit": "Edit tenant",
     "label": "Tenant",
     "name": "Name",
     "none": "No tenants yet.",
     "select": "Select tenant",
     "slug": "Slug",
-    "switcher": "Switch tenant"
+    "slugHint": "Lowercase letters, numbers and hyphens.",
+    "slugInvalid": "Use lowercase letters, numbers and single hyphens (no leading/trailing hyphen).",
+    "switcher": "Switch tenant",
+    "updateFailed": "Could not update the tenant"
   },
   "testMode": {
     "badge": {

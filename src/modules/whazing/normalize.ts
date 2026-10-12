@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { extractTagValues, hasIgnoredTag } from "./tags";
 import type {
   NormalizedWhazingAttachment,
   NormalizedWhazingContact,
@@ -26,62 +27,121 @@ function num(v: unknown): number | null {
   return typeof v === "number" ? v : null;
 }
 
-// A click-to-WhatsApp-ad (ctwa_ad) entry signal lives in contextInfo, buried inside the webhook's
-// raw `dataJson` blob (a JSON STRING, a full WhatsApp protocol message — a different, deeper
-// structure than the flat message fields the rest of this file reads). Its exact position varies
-// by message type (text vs image vs video vs the flat "content" shape Whazing actually sends), so
-// every known variant is checked in order — mirrors the equivalent extraction already running in
-// production (n8n's "Analisar Sinal de Campanha" node) for this same webhook stream.
-function extractCampaignSignal(
-  dataJson: unknown,
+// A click-to-WhatsApp-ad (ctwa_ad) entry signal lives in contextInfo (inside the raw dataJson
+// WhatsApp protocol message) OR in Whazing's ticket referral fields (metaReferralJson, metaAdName,
+// leadSource = "META_AD"). Both sources are checked and merged so no ad context is missed.
+export function extractCampaignSignal(
+  dataJson?: unknown,
+  ticket?: Record<string, unknown> | null,
+  root?: Record<string, unknown>,
 ): WhazingCampaignSignal | null {
-  if (typeof dataJson !== "string" || dataJson === "") return null;
-  let raw: unknown;
-  try {
-    raw = JSON.parse(dataJson);
-  } catch {
-    return null;
-  }
-  const message =
-    raw && typeof raw === "object"
-      ? ((raw as Record<string, unknown>).message as
-          | Record<string, unknown>
-          | undefined)
-      : undefined;
-  if (!message) return null;
-  const variants = [
-    "extendedTextMessage",
-    "imageMessage",
-    "videoMessage",
-    "documentMessage",
-    "content",
-  ] as const;
-  let contextInfo: Record<string, unknown> | undefined;
-  for (const key of variants) {
-    const variant = message[key];
-    if (variant && typeof variant === "object") {
-      const ci = (variant as Record<string, unknown>).contextInfo;
-      if (ci && typeof ci === "object") {
-        contextInfo = ci as Record<string, unknown>;
-        break;
+  let signalFromDataJson: WhazingCampaignSignal | null = null;
+  if (typeof dataJson === "string" && dataJson !== "") {
+    try {
+      const raw = JSON.parse(dataJson);
+      const message =
+        raw && typeof raw === "object"
+          ? ((raw as Record<string, unknown>).message as
+              | Record<string, unknown>
+              | undefined)
+          : undefined;
+      if (message) {
+        const variants = [
+          "extendedTextMessage",
+          "imageMessage",
+          "videoMessage",
+          "documentMessage",
+          "content",
+        ] as const;
+        let contextInfo: Record<string, unknown> | undefined;
+        for (const key of variants) {
+          const variant = message[key];
+          if (variant && typeof variant === "object") {
+            const ci = (variant as Record<string, unknown>).contextInfo;
+            if (ci && typeof ci === "object") {
+              contextInfo = ci as Record<string, unknown>;
+              break;
+            }
+          }
+        }
+        if (contextInfo) {
+          const adReply = contextInfo.externalAdReply;
+          const ad =
+            adReply && typeof adReply === "object"
+              ? (adReply as Record<string, unknown>)
+              : {};
+          const ctwaClid = str(ad.ctwaClid);
+          const isCtwaAd =
+            str(contextInfo.entryPointConversionSource) === "ctwa_ad";
+          if (isCtwaAd || ctwaClid) {
+            signalFromDataJson = {
+              ctwaClid,
+              sourceId: str(ad.sourceId) ?? str(ad.sourceID),
+              sourceApp: str(ad.sourceApp),
+              adTitle: str(ad.title),
+              adBody: str(ad.body),
+            };
+          }
+        }
       }
+    } catch {}
+  }
+
+  // Check Whazing's ticket / root metaReferralJson and campaign fields
+  let signalFromReferral: WhazingCampaignSignal | null = null;
+  const rawReferral = ticket?.metaReferralJson ?? root?.metaReferralJson;
+  let ref: Record<string, unknown> | null = null;
+  if (typeof rawReferral === "string" && rawReferral.trim() !== "") {
+    try {
+      ref = JSON.parse(rawReferral);
+    } catch {}
+  } else if (rawReferral && typeof rawReferral === "object") {
+    ref = rawReferral as Record<string, unknown>;
+  }
+
+  const leadSource = str(ticket?.leadSource) ?? str(root?.leadSource);
+  const metaAdName = str(ticket?.metaAdName) ?? str(root?.metaAdName);
+  const metaCampaignName =
+    str(ticket?.metaCampaignName) ?? str(root?.metaCampaignName);
+
+  if (ref || leadSource === "META_AD" || metaAdName || metaCampaignName) {
+    const ctwaClid = str(ref?.ctwaClid);
+    const sourceId = str(ref?.adId) ?? str(ref?.sourceId) ?? str(ref?.sourceID);
+    const sourceApp =
+      str(ref?.provider) ??
+      str(ref?.sourceType) ??
+      str(ref?.sourceApp) ??
+      (leadSource === "META_AD" ? "Meta" : null);
+    const adTitle = str(ref?.title) ?? metaAdName ?? metaCampaignName;
+    const adBody = str(ref?.body);
+    const thumbnailUrl = str(ref?.thumbnailUrl);
+
+    if (ctwaClid || sourceId || adTitle || adBody || leadSource === "META_AD") {
+      signalFromReferral = {
+        ctwaClid,
+        sourceId,
+        sourceApp,
+        adTitle,
+        adBody,
+        thumbnailUrl,
+      };
     }
   }
-  if (!contextInfo) return null;
-  const adReply = contextInfo.externalAdReply;
-  const ad =
-    adReply && typeof adReply === "object"
-      ? (adReply as Record<string, unknown>)
-      : {};
-  const ctwaClid = str(ad.ctwaClid);
-  const isCtwaAd = str(contextInfo.entryPointConversionSource) === "ctwa_ad";
-  if (!isCtwaAd && !ctwaClid) return null;
+
+  if (!signalFromDataJson && !signalFromReferral) return null;
+  if (!signalFromDataJson) return signalFromReferral;
+  if (!signalFromReferral) return signalFromDataJson;
+
   return {
-    ctwaClid,
-    sourceId: str(ad.sourceId) ?? str(ad.sourceID),
-    sourceApp: str(ad.sourceApp),
-    adTitle: str(ad.title),
-    adBody: str(ad.body),
+    ctwaClid:
+      signalFromDataJson.ctwaClid ?? signalFromReferral.ctwaClid ?? null,
+    sourceId:
+      signalFromDataJson.sourceId ?? signalFromReferral.sourceId ?? null,
+    sourceApp:
+      signalFromDataJson.sourceApp ?? signalFromReferral.sourceApp ?? null,
+    adTitle: signalFromDataJson.adTitle ?? signalFromReferral.adTitle ?? null,
+    adBody: signalFromDataJson.adBody ?? signalFromReferral.adBody ?? null,
+    thumbnailUrl: signalFromReferral.thumbnailUrl ?? null,
   };
 }
 
@@ -97,6 +157,7 @@ function coerceNum(v: unknown): number | null {
 function normalizeContact(raw: unknown): NormalizedWhazingContact | null {
   if (!raw || typeof raw !== "object") return null;
   const c = raw as Record<string, unknown>;
+  const tags = extractTagValues(c.tags);
   return {
     id: coerceNum(c.id),
     name: str(c.name),
@@ -108,16 +169,24 @@ function normalizeContact(raw: unknown): NormalizedWhazingContact | null {
     // the per-ticket key; a returning contact's new ticket never recalled the prior conversation).
     // Keep the old names as a fallback in case another Whazing payload shape ever uses them.
     whatsappId: str(c.lid) ?? str(c.waId) ?? str(c.whatsappId) ?? str(c.jid),
+    tags: tags.length > 0 ? tags : undefined,
   };
 }
 
 function normalizeAttachment(raw: unknown): NormalizedWhazingAttachment {
   const a =
     raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  let mediaUrl = str(a.mediaUrl) ?? str(a.url);
+  if (!mediaUrl && typeof a.base64 === "string" && a.base64.trim() !== "") {
+    const b64 = a.base64.trim();
+    mediaUrl = b64.startsWith("data:")
+      ? b64
+      : `data:${str(a.mimeType) ?? "application/octet-stream"};base64,${b64}`;
+  }
   return {
     id: str(a.id),
     mediaType: str(a.mediaType) ?? str(a.type),
-    mediaUrl: str(a.mediaUrl) ?? str(a.url),
+    mediaUrl,
     mimeType: str(a.mimeType),
     fileName: str(a.fileName) ?? str(a.name),
   };
@@ -294,6 +363,16 @@ export function normalizeWhazingEvent(
     message = null;
   }
 
+  const ticketContact = ticket?.contact as Record<string, unknown> | undefined;
+  const rootContact = r.contact as Record<string, unknown> | undefined;
+  const rawTags = [
+    ...extractTagValues(r.tags),
+    ...extractTagValues(ticket?.tags),
+    ...extractTagValues(ticketContact?.tags),
+    ...extractTagValues(rootContact?.tags),
+  ];
+  const tags = Array.from(new Set(rawTags));
+
   return {
     event,
     ticketId,
@@ -304,6 +383,7 @@ export function normalizeWhazingEvent(
     campaignSignal,
     contact,
     message,
+    tags: tags.length > 0 ? tags : undefined,
   };
 }
 
@@ -325,13 +405,24 @@ export function isNewIncomingMessage(event: NormalizedWhazingEvent): boolean {
 //   - isAutomation: ignore Typebot / integration messages
 //   - assignedUserId: a human owns the ticket — bot must stay silent
 //   - status: closed tickets are done; pending is still ours
-export function shouldWhazingBotHandle(event: NormalizedWhazingEvent): boolean {
+//   - ignoredTags: tickets or contacts with any ignored tag are ignored
+export function shouldWhazingBotHandle(
+  event: NormalizedWhazingEvent,
+  ignoredTags?: Array<number | string>,
+): boolean {
   const msg = event.message;
   if (!msg) return false;
   if (msg.fromMe) return false;
   if (msg.isAutomation) return false;
   if (event.assignedUserId != null) return false;
   if (event.status === "closed") return false;
+  if (ignoredTags && ignoredTags.length > 0) {
+    const candidateTags = [
+      ...(event.tags ?? []),
+      ...(event.contact?.tags ?? []),
+    ];
+    if (hasIgnoredTag(candidateTags, ignoredTags)) return false;
+  }
   return true;
 }
 
