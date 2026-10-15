@@ -39,7 +39,10 @@ import {
   transcribeWhazingAudio,
 } from "./media";
 import { renderWhazingMessage } from "./render";
-import { hasIgnoredTag, resolveIgnoredTags } from "./tags";
+import { sanitizeWhazingReply } from "./sanitizer";
+import { hasClosingTag, resolveWhazingSessionConfig } from "./session-config";
+import { hasIgnoredTag } from "./tags";
+import { resolveIgnoredTags } from "./tags-resolver";
 import { resolveWhazingGraphThreadId } from "./thread-keys";
 import { buildWhazingNativeTools } from "./tools";
 import type { NormalizedWhazingEvent } from "./types";
@@ -226,6 +229,79 @@ export async function runWhazingAgentTurn(
   if (!loaded) {
     clearTurnInFlight(threadId);
     return "no-agent";
+  }
+
+  // Session Window TTL & Closing Tags: on Whazing, operators rarely click "resolve/close" on tickets,
+  // causing tickets to stay open indefinitely. If the previous interaction occurred more than the
+  // configured TTL (default 24h) ago, or if an immediate closing tag was applied, consider the prior
+  // session completed: wipe the stale LangGraph thread memory so the agent does not carry forward
+  // ancient conversations or hallucinate on old context, and reset any stale humanTakeoverAt flag.
+  const sessionCfg = await resolveWhazingSessionConfig(
+    base,
+    tenantId,
+    instanceId,
+  );
+  const isClosingTagPresent = hasClosingTag(
+    eventTags,
+    sessionCfg.closingTagIds,
+  );
+
+  const priorConv = await runScopedOn(base, sysCtx(tenantId), (db) =>
+    db.whazingConversation.findUnique({
+      where: {
+        tenantId_instanceId_ticketId: { tenantId, instanceId, ticketId },
+      },
+      select: {
+        lastInboundAt: true,
+        lastEventAt: true,
+        humanTakeoverAt: true,
+      },
+    }),
+  ).catch(() => null);
+
+  if (priorConv) {
+    const lastActive = priorConv.lastInboundAt ?? priorConv.lastEventAt;
+    const isExpiredByInactivity =
+      lastActive != null &&
+      Date.now() - lastActive.getTime() > sessionCfg.sessionTtlMs;
+
+    if (isExpiredByInactivity || isClosingTagPresent) {
+      try {
+        const cp = await getCheckpointer();
+        await cp.deleteThread(threadId);
+        logger.info(
+          {
+            ticketId,
+            threadId,
+            isClosingTagPresent,
+            idleHours: lastActive
+              ? ((Date.now() - lastActive.getTime()) / 3600000).toFixed(1)
+              : null,
+            ttlHours: sessionCfg.sessionTtlHours,
+          },
+          "whazing: session reset (inactivity TTL or closing tag) — conversation memory wiped",
+        );
+      } catch (e) {
+        logger.warn(
+          { ticketId, error: e },
+          "whazing: failed resetting stale thread memory (non-fatal)",
+        );
+      }
+
+      if (
+        isClosingTagPresent ||
+        (priorConv.humanTakeoverAt &&
+          Date.now() - priorConv.humanTakeoverAt.getTime() >
+            sessionCfg.sessionTtlMs)
+      ) {
+        await runScopedOn(base, sysCtx(tenantId), (db) =>
+          db.whazingConversation.updateMany({
+            where: { tenantId, instanceId, ticketId },
+            data: { humanTakeoverAt: null },
+          }),
+        ).catch(() => {});
+      }
+    }
   }
 
   // Upsert the conversation mirror so the Conversations page shows this ticket.
@@ -711,6 +787,32 @@ export async function runWhazingTurnTail(
       if (outGuard.reply === null) return "blocked";
       reply = outGuard.reply;
     }
+
+    // Guardrail Anti-Alucinação para WhatsApp (bloqueia vazamento de raciocínio, tags órfãs, frases em inglês)
+    const sanitized = sanitizeWhazingReply(reply);
+    if (!sanitized.ok) {
+      logger.warn(
+        {
+          ticketId,
+          threadId,
+          reply,
+          reason: sanitized.reason,
+        },
+        "whazing: blocked hallucinated/malformed bot reply",
+      );
+      emitFlowEvent(flow, {
+        stage: "generate",
+        level: "warn",
+        status: "error",
+        detail: {
+          outcome: "blocked_hallucination",
+          reason: sanitized.reason,
+          reply,
+        },
+      });
+      return "blocked";
+    }
+    reply = sanitized.cleanReply;
 
     await deliverReply(
       client,

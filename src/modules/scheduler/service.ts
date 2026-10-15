@@ -25,7 +25,9 @@ export type SchedulerJobKind =
   | "FLOWLOG_SWEEP"
   | "APPOINTMENT_REMINDER"
   | "REDIRECT_FOLLOWUP"
-  | "WHAZING_RECONCILE";
+  | "WHAZING_RECONCILE"
+  | "WHAZING_DEBOUNCE"
+  | "WHAZING_HUMAN_SLA";
 
 export interface ClaimedJob {
   id: bigint;

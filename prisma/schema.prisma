@@ -66,6 +66,7 @@ enum SchedulerJobKind {
   REDIRECT_FOLLOWUP
   WHAZING_RECONCILE
   WHAZING_DEBOUNCE
+  WHAZING_HUMAN_SLA
 }
 
 enum SchedulerJobStatus {

@@ -239,10 +239,14 @@ export function WhazingPage() {
   const [creating, setCreating] = useState(false);
 
   // Edit form
-  const [editTab, setEditTab] = useState<"general" | "intake">("general");
+  const [editTab, setEditTab] = useState<"general" | "intake" | "session">(
+    "general",
+  );
   const [editName, setEditName] = useState("");
   const [editBaseUrl, setEditBaseUrl] = useState("");
   const [editApiKey, setEditApiKey] = useState("");
+  const [editSessionTtlHours, setEditSessionTtlHours] = useState("24");
+  const [editClosingTagIds, setEditClosingTagIds] = useState("");
   const [editHistoryRoutingEnabled, setEditHistoryRoutingEnabled] =
     useState(false);
   const [editEscalateQueueId, setEditEscalateQueueId] = useState("");
@@ -354,6 +358,17 @@ export function WhazingPage() {
         : typeof s.whazingIntake === "object" && s.whazingIntake !== null
           ? (s.whazingIntake as Record<string, unknown>)
           : s;
+    const session =
+      typeof s.session === "object" && s.session !== null
+        ? (s.session as Record<string, unknown>)
+        : s;
+    const ttl = session.sessionTtlHours ?? s.sessionTtlHours;
+    setEditSessionTtlHours(ttl != null ? String(ttl) : "24");
+
+    const closingTags = session.closingTagIds ?? s.closingTagIds;
+    setEditClosingTagIds(
+      Array.isArray(closingTags) ? closingTags.join(", ") : "",
+    );
 
     setEditHistoryRoutingEnabled(Boolean(intake.historyRoutingEnabled));
     setEditEscalateQueueId(
@@ -405,6 +420,16 @@ export function WhazingPage() {
         campaignNotifyMessage: editCampaignNotifyMessage,
       };
 
+      const parsedTtl = Number(editSessionTtlHours.trim());
+      const nextSession = {
+        sessionTtlHours:
+          Number.isInteger(parsedTtl) && parsedTtl > 0 ? parsedTtl : 24,
+        closingTagIds: editClosingTagIds
+          .split(",")
+          .map((item) => Number(item.trim()))
+          .filter((n) => Number.isInteger(n) && n > 0),
+      };
+
       const body: {
         name?: string;
         baseUrl?: string;
@@ -414,6 +439,7 @@ export function WhazingPage() {
         settings: {
           ...origSettings,
           intake: nextIntake,
+          session: nextSession,
         },
       };
 
@@ -614,10 +640,21 @@ export function WhazingPage() {
       ? origIntake.campaignNotifyMessage
       : "Lead de campanha identificado.\n\nctwaClid: {{ctwaClid}}";
 
+  const origSession =
+    typeof origSettings.session === "object" && origSettings.session !== null
+      ? (origSettings.session as Record<string, unknown>)
+      : origSettings;
+  const origTtl = String(origSession.sessionTtlHours ?? 24);
+  const origClosing = Array.isArray(origSession.closingTagIds)
+    ? (origSession.closingTagIds as unknown[]).join(", ")
+    : "";
+
   const editDirty =
     editName !== (editPayload?.name ?? "") ||
     editBaseUrl !== (editPayload?.baseUrl ?? "") ||
     editApiKey.trim() !== "" ||
+    editSessionTtlHours !== origTtl ||
+    editClosingTagIds !== origClosing ||
     editHistoryRoutingEnabled !== Boolean(origIntake.historyRoutingEnabled) ||
     editEscalateQueueId !==
       (origIntake.escalateQueueId != null
@@ -1077,9 +1114,13 @@ export function WhazingPage() {
                 key: "intake",
                 label: t("whazing.tabIntake", "Triagem & Meta Ads"),
               },
+              {
+                key: "session",
+                label: t("whazing.tabSession", "Sessão & Memória"),
+              },
             ]}
             value={editTab}
-            onChange={(k) => setEditTab(k as "general" | "intake")}
+            onChange={(k) => setEditTab(k as "general" | "intake" | "session")}
             aria-label={t(
               "whazing.editTabsAria",
               "Abas de edição da instância",
@@ -1288,6 +1329,87 @@ export function WhazingPage() {
                     </FormField>
                   </div>
                 )}
+              </div>
+            </div>
+          )}
+
+          {editTab === "session" && (
+            <div className="flex flex-col gap-4 pt-1">
+              <div className="flex flex-col gap-3 rounded-lg border border-border bg-bg-secondary/40 p-4">
+                <div>
+                  <h4 className="font-medium text-sm text-text-primary">
+                    {t(
+                      "whazing.sessionTtlTitle",
+                      "Janela de Inatividade (Reset de Memória)",
+                    )}
+                  </h4>
+                  <p className="mt-1 text-text-muted text-xs leading-relaxed">
+                    {t(
+                      "whazing.sessionTtlDescription",
+                      "Tempo sem interação para reiniciar o atendimento do zero. Isso apaga o histórico do LangGraph e expira o atendimento humano caso os atendentes não tenham fechado o ticket no Whazing.",
+                    )}
+                  </p>
+                </div>
+
+                <div className="border-border/60 border-t pt-3">
+                  <FormField
+                    label={t(
+                      "whazing.sessionTtlHoursLabel",
+                      "Tempo de inatividade (em horas)",
+                    )}
+                    description={t(
+                      "whazing.sessionTtlHoursHint",
+                      "Padrão: 24 horas. Mínimo 1h, máximo 168h (7 dias).",
+                    )}
+                  >
+                    <Input
+                      type="number"
+                      min={1}
+                      max={168}
+                      step={1}
+                      value={editSessionTtlHours}
+                      onChange={(e) => setEditSessionTtlHours(e.target.value)}
+                      placeholder="24"
+                    />
+                  </FormField>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-3 rounded-lg border border-border bg-bg-secondary/40 p-4">
+                <div>
+                  <h4 className="font-medium text-sm text-text-primary">
+                    {t(
+                      "whazing.closingTagsTitle",
+                      "Etiquetas de Fechamento Imediato",
+                    )}
+                  </h4>
+                  <p className="mt-1 text-text-muted text-xs leading-relaxed">
+                    {t(
+                      "whazing.closingTagsDescription",
+                      "Quando qualquer uma dessas etiquetas for adicionada ao ticket ou contato no Whazing, o histórico da conversa é limpo imediatamente no próximo contato.",
+                    )}
+                  </p>
+                </div>
+
+                <div className="border-border/60 border-t pt-3">
+                  <FormField
+                    label={t(
+                      "whazing.closingTagIdsLabel",
+                      "IDs das Etiquetas de Encerramento (separados por vírgula)",
+                    )}
+                    description={t(
+                      "whazing.closingTagIdsHint",
+                      "Exemplo: 71, 75, 82. Deixe em branco se não desejar usar encerramento por etiqueta.",
+                    )}
+                  >
+                    <Input
+                      type="text"
+                      value={editClosingTagIds}
+                      onChange={(e) => setEditClosingTagIds(e.target.value)}
+                      placeholder="ex.: 71, 75"
+                    />
+                  </FormField>
+                </div>
               </div>
             </div>
           )}

@@ -21,7 +21,8 @@ import {
   whazingDeliveryId,
 } from "./normalize";
 import { runWhazingAgentTurn, upsertWhazingConversation } from "./runtime";
-import { resolveIgnoredTags } from "./tags";
+import { resolveWhazingSessionConfig } from "./session-config";
+import { resolveIgnoredTags } from "./tags-resolver";
 import { resolveWhazingGraphThreadId } from "./thread-keys";
 import type { NormalizedWhazingEvent } from "./types";
 
@@ -592,7 +593,28 @@ async function hasHumanTakenOver(
       select: { humanTakeoverAt: true },
     }),
   );
-  return row?.humanTakeoverAt != null;
+  if (!row?.humanTakeoverAt) return false;
+
+  // Stale human takeover: if the human replied more than session TTL ago on a ticket that was never closed,
+  // do not permanently silence the bot on new customer contacts. Expire the takeover.
+  const sessionCfg = await resolveWhazingSessionConfig(
+    base,
+    tenantId,
+    instanceId,
+  );
+  const isStale =
+    Date.now() - row.humanTakeoverAt.getTime() > sessionCfg.sessionTtlMs;
+  if (isStale) {
+    await runScopedOn(base, sysCtx(tenantId), (db) =>
+      db.whazingConversation.updateMany({
+        where: { tenantId, instanceId, ticketId },
+        data: { humanTakeoverAt: null },
+      }),
+    ).catch(() => {});
+    return false;
+  }
+
+  return true;
 }
 
 async function markProcessed(

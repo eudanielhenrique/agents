@@ -27,7 +27,9 @@ import {
   type ServiceWindowConfig,
 } from "@/modules/service-window/service";
 import { loadWhazingClient } from "./instance";
-import { hasIgnoredTag, resolveIgnoredTags } from "./tags";
+import { sanitizeWhazingReply } from "./sanitizer";
+import { hasIgnoredTag } from "./tags";
+import { resolveIgnoredTags } from "./tags-resolver";
 import { buildWhazingNativeTools } from "./tools";
 
 // Whazing's proactive-nudge engine. Parallel to runAgentNudge (src/graph/nudge.ts) but transport-aware
@@ -223,7 +225,15 @@ export async function runWhazingAgentNudge(
   );
 
   if (mode === "freeform") {
-    await client.sendMessage(ticketId, reply);
+    const sanitized = sanitizeWhazingReply(reply);
+    if (!sanitized.ok) {
+      logger.warn(
+        { ticketId, threadId, reply, reason: sanitized.reason },
+        "whazing nudge: blocked hallucinated/malformed reply",
+      );
+      return "silent";
+    }
+    await client.sendMessage(ticketId, sanitized.cleanReply);
     return "messaged";
   }
 
